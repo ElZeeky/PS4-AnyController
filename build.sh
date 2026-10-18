@@ -133,7 +133,6 @@ cmd_package() {
   mkdir -p "$ROOT/release"
   cp "$elf" "$ROOT/release/xcp_payload.elf"
   cp "$ROOT/packaging/INSTALL.txt"  "$ROOT/release/INSTALL.txt"
-  cp "$ROOT/packaging/payloads.ini" "$ROOT/release/payloads.ini"
 
   printf '\n'
   ls -l "$ROOT/release"

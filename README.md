@@ -52,10 +52,10 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
 3. GoldHEN → Utilities → **Payloader LaunchPad** → run it, then press a button on your
    controller to answer the console's "Who's using this controller?" prompt.
 4. Optional: add it to AutoRun so it starts on boot — see
-   [`packaging/payloads.ini`](packaging/payloads.ini).
+   [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
 
-`./build.sh package` assembles a ready-to-drag **`release/`** folder (payload + `INSTALL.txt`
-+ AutoRun example). Full walkthrough: [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
+`./build.sh package` assembles a ready-to-drag **`release/`** folder (payload + `INSTALL.txt`).
+Full walkthrough: [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
 
 ### Good to know
 
@@ -141,7 +141,7 @@ real report and runs it through the same decoder the console runs. See
 | `mocks/` | a fake scePad/sceUserService, plus report-packing helpers |
 | `host/` | `xcp_inspector`, the PC-side tool |
 | `ps4/` | the payload (`payload/`), Orbis glue (`src/`), `build_payload.sh`, the libScePad patch, plus the `hello/` and `dumper/` diagnostic payloads |
-| `packaging/` | `INSTALL.txt` + `payloads.ini` used to assemble `release/` |
+| `packaging/` | `INSTALL.txt` used to assemble `release/` |
 | `tests/` | 66 tests, 319 checks, no test-framework dependency |
 | `samples/` | hex report dumps for `--play` |
 | `docs/` | deployment guides and `docs/logs/` (real console run logs) |
