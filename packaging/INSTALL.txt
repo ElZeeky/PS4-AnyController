@@ -14,24 +14,22 @@ Files here:
 What you need
 -------------
 
-* A PS4 on firmware 11.00 (also known to work on 10.01 / 11.02) with GoldHEN
-  v2.4b18.10 or newer already running.
-* A DS4 still connected, so you can navigate while you set this up.
+* A PS4 on firmware 11.00 with GoldHEN v2.4b18.10 or newer already running.
+* A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional
+  afterwards.
 * Your controller's USB receiver (or cable) in a PS4 USB port.
-* FileZilla (or any FTP client) to copy one file over. GoldHEN's FTP server is
-  on port 2121, user "ps4", password "ps4".
+* FileZilla (or any FTP client) to copy one file over.
 
 
 Step 1 - copy the payload
 -------------------------
 
-With FileZilla: connect to the console (SFTP/FTP, port 2121, ps4 / ps4), open
-/data/payloads/ on the console, and drag xcp_payload.elf into it.
+With FileZilla: connect to the console over FTP, open /data/payloads/ on the
+console, and drag xcp_payload.elf into it.
 
-With a command line (replace the IP):
+With a command line (replace <PS4-IP> with the console's address):
 
-    curl -u ps4:ps4 -T xcp_payload.elf \
-        ftp://192.168.1.123:2121/data/payloads/xcp_payload.elf
+    curl -T xcp_payload.elf ftp://<PS4-IP>/data/payloads/xcp_payload.elf
 
 
 Step 2 - start it once
