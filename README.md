@@ -35,13 +35,11 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
 
 ## Requirements
 
-- A PS4 on firmware **11.00** (also reported working on 10.01 / 11.02) with
-  **GoldHEN v2.4b18.10 or later**.
+- A PS4 on firmware **11.00** with **GoldHEN v2.4b18.10 or later**.
 - A **wired third-party controller**. The decoder understands the Xbox 360, Xbox One and
   Switch controller report layouts, including clones that use them.
 - A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional afterwards.
-- A way to copy one file over FTP (e.g. FileZilla) — GoldHEN's server is on port **2121**,
-  user/password `ps4`/`ps4`.
+- A way to copy one file over FTP (e.g. FileZilla).
 
 ---
 
