@@ -124,14 +124,14 @@ cmd_clean() {
 # text and an AutoRun example. This is the thing attached to a GitHub Release -
 # it is generated, so it lives outside version control (see .gitignore).
 cmd_package() {
-  local elf="$BUILD/ps4/xcp_payload.elf"
+  local elf="$BUILD/ps4/AnyController.elf"
   [ -f "$elf" ] || die "no payload yet - run ./build.sh payload first"
   [ -f "$ROOT/packaging/INSTALL.txt" ] || die "packaging/INSTALL.txt missing"
 
   say "assembling release/"
   rm -rf "$ROOT/release"
   mkdir -p "$ROOT/release"
-  cp "$elf" "$ROOT/release/xcp_payload.elf"
+  cp "$elf" "$ROOT/release/AnyController.elf"
   cp "$ROOT/packaging/INSTALL.txt"  "$ROOT/release/INSTALL.txt"
 
   printf '\n'

@@ -58,7 +58,7 @@ empty placeholders. **No libc is linked in**: `printf`, `memset`, `snprintf` and
 stay as imports and are resolved at load time.
 
 The build ends by checking its own output - it fails if the ELF is not a PIE or has lost
-`_start`/`main` - and leaves **`build/ps4/xcp_payload.elf`** behind.
+`_start`/`main` - and leaves **`build/ps4/AnyController.elf`** behind.
 
 Licensing, worth knowing before shipping: that binary contains the SDK's GPL-3.0 CRT, so
 the **binary** is GPL-3.0 while this repository's sources stay MIT. See [NOTICE](../NOTICE).
@@ -73,13 +73,13 @@ the same kind of artifact; nothing in this repository depends on it.
 GoldHEN's FTP server normally listens on port **2121**, user/password `ps4`/`ps4`.
 
 ```bash
-curl -u ps4:ps4 -T build/ps4/xcp_payload.elf \
-  ftp://192.168.1.123:2121/data/payloads/xcp_payload.elf
+curl -u ps4:ps4 -T build/ps4/AnyController.elf \
+  ftp://192.168.1.123:2121/data/payloads/AnyController.elf
 ```
 
 Then, on the console:
 
-* **GoldHEN → Utilities → Payloader LaunchPad**, pick `xcp_payload.elf` to start it
+* **GoldHEN → Utilities → Payloader LaunchPad**, pick `AnyController.elf` to start it
   once, or press **Square** on it to add it to the AutoRun queue; or
 * from a computer, send it to GoldHEN's **PayLoader on port 9090** with any payload
   sender; or
@@ -87,7 +87,7 @@ Then, on the console:
 
   ```ini
   [AutoRun]
-  /user/data/payloads/xcp_payload.elf = 1
+  /user/data/payloads/AnyController.elf = 1
   ```
 
 AutoRun is what makes it start by itself after every reboot, which is what you want once
@@ -110,11 +110,11 @@ For the first run, **start it by hand from the LaunchPad** so you can see it fai
 
 ## 5. Reading the log
 
-**Easiest: the payload writes its own file, `/data/xcp_payload.log`.** Open GoldHEN's
-FTP (FileZilla, port 2121) and download `/data/xcp_payload.log`. That works even with
+**Easiest: the payload writes its own file, `/data/AnyController.log`.** Open GoldHEN's
+FTP (FileZilla, port 2121) and download `/data/AnyController.log`. That works even with
 klog off, and it is the file to send back.
 
-> If `/data/xcp_payload.log` is **not there** after a run, the payload's code never
+> If `/data/AnyController.log` is **not there** after a run, the payload's code never
 > executed: the ELF did not load or its imports did not resolve in the hijacked process.
 > That is the finding - say so, because no klog line can appear either.
 
@@ -234,7 +234,7 @@ Things that are true by construction:
 
 ## 8. What to send back
 
-1. The file `/data/xcp_payload.log` (or every `xcp:` line from klog, from
+1. The file `/data/AnyController.log` (or every `xcp:` line from klog, from
    `virtual-pad payload starting` on), or the fact that the file does not exist.
 2. The `usb:` block in particular - that is what decides the next step.
 3. The `xcpcapture` lines.

@@ -31,7 +31,7 @@
 #define XCP_TAG "xcp: "
 
 /* Where the payload keeps its own log, reachable over GoldHEN's FTP server. */
-#define XCP_PAYLOAD_LOG_PATH "/data/xcp_payload.log"
+#define XCP_PAYLOAD_LOG_PATH "/data/AnyController.log"
 
 #if defined(XCP_PAYLOAD)
 

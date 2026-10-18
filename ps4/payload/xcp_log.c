@@ -10,7 +10,7 @@
  * Every line therefore goes two ways:
  *   - to the kernel log directly, through the CRT's klog_printf (a syscall), so
  *     it shows up in GoldHEN's klog regardless of TTY redirect;
- *   - to /data/xcp_payload.log, which is pulled off the console over FTP.
+ *   - to /data/AnyController.log, which is pulled off the console over FTP.
  *
  * If that file is not there after a run, this code never executed at all: the
  * ELF failed to load or resolve imports in the hijacked process, which is itself

@@ -1,4 +1,4 @@
-xcp payload - install in 3 minutes
+INSTALL
 ==================================
 
 This makes any wired third-party controller work as PLAYER 1 on a jailbroken
@@ -7,7 +7,7 @@ that by creating a virtual DualShock 4, so it is a GoldHEN *payload*.
 
 Files here:
 
-    xcp_payload.elf     the payload (this is the one you need)
+    AnyController.elf     the payload (this is the one you need)
     INSTALL.txt         this file
 
 
@@ -25,17 +25,17 @@ Step 1 - copy the payload
 -------------------------
 
 With FileZilla: connect to the console over FTP, open /data/payloads/ on the
-console, and drag xcp_payload.elf into it.
+console, and drag AnyController.elf into it.
 
 With a command line (replace <PS4-IP> with the console's address):
 
-    curl -T xcp_payload.elf ftp://<PS4-IP>/data/payloads/xcp_payload.elf
+    curl -T AnyController.elf ftp://<PS4-IP>/data/payloads/AnyController.elf
 
 
 Step 2 - start it once
 ----------------------
 
-On the console: GoldHEN -> Utilities -> Payloader LaunchPad -> run xcp_payload.elf.
+On the console: GoldHEN -> Utilities -> Payloader LaunchPad -> run AnyController.elf.
 
 A few seconds later the console behaves as if a DS4 had just been plugged in:
 "Who's using this controller?" appears. Pick your user and press a button on the
@@ -45,12 +45,12 @@ controller to accept it. The pad is now player 1 everywhere.
 Step 3 - make it automatic (optional)
 -------------------------------------
 
-In the LaunchPad, highlight xcp_payload.elf and press Square to add it to the
+In the LaunchPad, highlight AnyController.elf and press Square to add it to the
 AutoRun queue. Or edit /data/GoldHEN/payloads.ini by hand and add this line
 (keep every other line already there) so it starts by itself on every boot:
 
     [AutoRun]
-    /data/payloads/xcp_payload.elf = 1
+    /data/payloads/AnyController.elf = 1
 
 
 Touchpad click
@@ -72,7 +72,7 @@ back to normal) but the payload keeps running, ready if the pad comes back.
 If something is wrong
 ---------------------
 
-The payload writes a log to /data/xcp_payload.log on the console. Grab it over
+The payload writes a log to /data/AnyController.log on the console. Grab it over
 FTP and read it; the project's README has the full guide. The most common issues:
 
 * Nothing happens -> the file is not in /data/payloads/ or GoldHEN is too old.

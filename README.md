@@ -8,7 +8,7 @@
 Use **any wired third-party controller** as **PLAYER 1** on a jailbroken **PS4** — in every
 screen: home, settings, sign-in and games. A real DualShock 4 can stay connected and usable.
 
-It runs as a **GoldHEN payload** (`xcp_payload.elf`) and creates a **virtual DualShock 4**
+It runs as a **GoldHEN payload** (`AnyController.elf`) and creates a **virtual DualShock 4**
 through Sony's own virtual-device API, so the system itself sees your controller
 everywhere, not just inside a game. Confirmed working on a real firmware 11.00 console.
 
@@ -45,7 +45,7 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
 
 ## Install
 
-1. Grab `xcp_payload.elf` from a Release (or build it — see [Building](#building)).
+1. Grab `AnyController.elf` from a Release (or build it — see [Building](#building)).
 2. Copy it to `/data/payloads/` on the console.
 3. GoldHEN → Utilities → **Payloader LaunchPad** → run it, then press a button on your
    controller to answer the console's "Who's using this controller?" prompt.
@@ -90,7 +90,7 @@ Everything goes through `build.sh`. It finds a portable Zig automatically and fa
 scripts/fetch_vendor.sh      # clone the reference repos at pinned revisions
 ./build.sh test              # run the 66 unit tests
 ./build.sh cli               # build the PC inspector (host/)
-./build.sh payload           # cross-compile the payload -> build/ps4/xcp_payload.elf
+./build.sh payload           # cross-compile the payload -> build/ps4/AnyController.elf
 ./build.sh package           # assemble release/ for the console
 ```
 

@@ -47,7 +47,7 @@ OO="${OO_PS4_TOOLCHAIN:-$ROOT/.tools/oo/OpenOrbis/PS4Toolchain}"
 SDK="${PS4_PAYLOAD_SDK:-$ROOT/.tools/ps4-payload-sdk}"
 OUT="$ROOT/build/ps4"
 OBJ="$OUT/obj-payload"
-NAME="xcp_payload"
+NAME="AnyController"
 if [ "$HELLO" = "1" ]; then
   # Separate object dir: the link globs $OBJ/*.o, so mixing would link two mains.
   OBJ="$OUT/obj-hello"
