@@ -1,0 +1,15 @@
+
+xcp: =============================================
+xcp: virtual-pad payload starting
+xcp: sizeof(OrbisPadData) = 120
+xcp: log file: /data/xcp_payload.log
+xcp: =============================================
+xcp: sceUsbd init ok
+xcp: usb: 1 device(s) visible
+xcp:   usb[0] 054C:05C4 054C:05C4 (none)
+xcp: sceKernelLoadStartModule(/system/common/lib/libSceMbus.sprx) = 0x000041A7
+xcp: libSceMbus handle = 0x000041A7
+xcp: scePadInit() = 0x00000000
+xcp: scePadSetProcessPrivilege(1) = 0x00000000
+xcp: vda patch: vda=800895b40 base=800890000 callsite=800895c00 cave=800892f21
+xcp: vda patch: applied (cave stub + retargeted call)

@@ -1,0 +1,15 @@
+# Pinned revisions of third-party reference sources (cloned by scripts/fetch_vendor.sh)
+# Captured 2026-10-05T20:38:51Z
+OpenOrbis-PS4-Toolchain=0a1aaf9dd4a92695538bdeb09fb056d06dd11725
+xbox_controller_plugin=dfc17b2dd39cf7e1019f1ccc07c9e0353dc089f3
+# GPL-3.0. Build-time dependency of the payload target only: it supplies the CRT
+# and link script that make a GoldHEN payload loadable (see NOTICE).
+ps4-payload-sdk=573b4a0d0d5fa8695cfeee5f5e2f0447c550035d
+#
+# Read-only references. These are NOT cloned and NOTHING is taken from them:
+# they are the two projects known to work on a real console, and they are where
+# the facts in PROGRESS.md 4.9 come from (call order, the 0x803b0006 status, the
+# kernel-log event that carries the DeviceId). Both are GPL-3.0, so this project
+# reads them for behaviour and writes its own implementation.
+#   MoHadiShibli/Control4Free   (GPL-3.0)
+#   seregonwar/SplashDown       (GPL-3.0)

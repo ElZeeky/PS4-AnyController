@@ -1,0 +1,62 @@
+# Credits and third-party licences
+
+This project is an independent rework of an existing MIT-licensed plugin. The
+mapping between Xbox HID reports and OrbisPadData in `core/src/translate.c` is
+derived from that plugin and reproduces its behaviour deliberately, so that any
+difference observed on the console can be attributed to our changes rather than
+to the port.
+
+## crucifix86/xbox_controller_plugin
+
+* Source: https://github.com/crucifix86/xbox_controller_plugin
+* Licence: MIT
+* Used for: the Xbox 360 / Xbox One / Switch HID report layouts
+  (`core/include/xcp/report.h`), the button and axis mapping
+  (`core/src/translate.c`), the product-id lists (`core/src/report.c`) and the
+  `XCP_BTN_SHARE` / `XCP_BTN_PS` bit values, which are that project's guesses
+  rather than documented Orbis values.
+* Revision studied: see `third_party/REFS`.
+
+## ps4-payload-dev/sdk (ps4-payload-sdk)
+
+* Source: https://github.com/ps4-payload-dev/sdk
+* Licence: **GPL-3.0** — the only third-party component here that is not
+  permissive.
+* Used for: the CRT and link script that make a GoldHEN **payload** loadable (the
+  `_start` that calls `main()`, the runtime that resolves Sony imports by name,
+  and `elf_x86_64.x`). `./build.sh payload` clones the repository for those sources
+  and compiles them with Zig; its build system (make + LLVM) and its sysroot are
+  not used. Nothing of it is copied into this repository.
+* Consequence worth knowing before shipping a payload: the ELF that comes out
+  contains that CRT, so **the payload binary is GPL-3.0** even though the sources
+  in this repository stay MIT.
+* Revision: see `third_party/REFS`.
+
+## MoHadiShibli/Control4Free and seregonwar/SplashDown
+
+* Sources: https://github.com/MoHadiShibli/Control4Free,
+  https://github.com/seregonwar/SplashDown
+* Licence: GPL-3.0 (both)
+* Used for: **behaviour only, no code.** These are the two projects known to work
+  on a real console, and they are where the payload's design facts come from: the
+  order `dlopen(libSceMbus)` → `scePadInit` → `scePadSetProcessPrivilege(1)` →
+  `AddDevice`, the fact that `AddDevice` returns a status rather than a handle
+  (0x803b0006, which this project then patches that one call to neutralise - see
+  PROGRESS.md §4.10), that the handle is the low 32 bits of the MBus DeviceId
+  announced in `/dev/klog`, the `SCE_MBUS_EVENT_DEVICE_ADDED` / `subType:2` shape
+  of that line, and the 120-byte pad sample with a rising timestamp and counter.
+  Our implementation of all of it is our own; the licence boundary is the reason
+  this paragraph exists.
+
+## OpenOrbis PS4 Toolchain
+
+* Source: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain
+* Licence: see the toolchain repository
+* Used for: the freestanding PS4 headers, stub libraries, CRT and `create-fself`.
+
+## Zig
+
+* Source: https://ziglang.org
+* Licence: MIT
+* Used only as a local C compiler for the PC-side tests and tools on a machine
+  with no other toolchain installed. Not part of the shipped payload.

@@ -1,0 +1,13 @@
+=============================================
+xcp function dump: start
+log file: /data/xcp_dump.log
+=============================================
+dump: scePadVirtualDeviceAddDevice addr=800895b40 len=0x400
+dump: scePadVirtualDeviceAddDevice wrote /data/scePadVirtualDeviceAddDevice.bin
+dump: scePadInit addr=800890220 len=0x100
+dump: scePadInit wrote /data/scePadInit.bin
+dump: sceMbusDisconnectDevice addr=8008ab8b0 len=0x100
+dump: sceMbusDisconnectDevice wrote /data/sceMbusDisconnectDevice.bin
+dump: sceMbusBindDeviceWithUserId addr=8008ab680 len=0x100
+dump: sceMbusBindDeviceWithUserId wrote /data/sceMbusBindDeviceWithUserId.bin
+xcp function dump: done

@@ -1,0 +1,21 @@
+
+xcp: =============================================
+xcp: virtual-pad payload starting
+xcp: sizeof(OrbisPadData) = 120
+xcp: log file: /data/xcp_payload.log
+xcp: =============================================
+xcp: sceUsbd init ok
+xcp: usb: 1 device(s) visible
+xcp:   usb[0] 054C:05C4 054C:05C4 (none)
+xcp: sceKernelLoadStartModule(/system/common/lib/libSceMbus.sprx) = 0x000021B3
+xcp: libSceMbus handle = 0x000021B3
+xcp: scePadInit() = 0x00000000
+xcp: scePadSetProcessPrivilege(1) = 0x00000000
+xcp: vda patch: vda=824399b40 base=824394000 callsite=824399c00 cave=824396f21
+xcp: vda patch: applied (cave stub + retargeted call)
+xcp: marker add
+xcp: AddDevice(size=32 user=1 type=3) = 0x00000000
+xcp: klog pad-added: <118>#LOGIN MGR# Receive Event : SCE_MBUS_EVENT_DEVICE_ADDED [DeviceId:0x7030d][type:1][subType:2]
+xcp:   parsed DeviceId = 0x7030D
+xcp: device adopted: DeviceId=0x7030D handle=0x0007030D
+xcp: ready. The console decides which player the virtual pad is; it will show up as a new DualShock 4.

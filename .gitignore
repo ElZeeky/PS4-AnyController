@@ -1,0 +1,40 @@
+# Agent scratch state
+/.freebuff/
+
+# The .prx plugin: untested and non-functional, kept locally but never published.
+# NOTE: ps4/src/ also holds usb_sceusbd.c and orbis_glue.c, which the payload
+# needs, so the plugin files are excluded one by one rather than by directory.
+/ps4/src/hooks.c
+/ps4/src/main.c
+/ps4/include/hooks.h
+/ps4/include/plugin_config.h
+/ps4/build_prx.sh
+/docs/DEPLOY-PS4.md
+
+# Downloaded / cloned third-party sources (see scripts/fetch_vendor.sh)
+/vendor/
+
+# Locally downloaded toolchains (zig, OpenOrbis release, GoldHEN SDK)
+/.tools/
+
+# Build output
+/build/
+/obj/
+/bin/
+*.o
+*.elf
+*.oelf
+*.prx
+
+# PC artifacts
+/pc/xcp_inspector.exe
+*.exe
+
+# Sony library dumps (copyrighted - never publish these)
+/DUMPLOGS/*.bin
+
+# Generated installation package (binaries go to GitHub Releases, not the repo)
+/release/
+
+# Local console captures pasted into the repo root
+/*.log

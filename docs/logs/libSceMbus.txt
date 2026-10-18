@@ -1,0 +1,5 @@
+module libSceMbus name=libSceMbus.sprx segs=3
+seg[0] addr=82df80000 size=0xC000 prot=5
+seg[1] addr=82df90000 size=0x4000 prot=3
+seg[2] addr=82df8c000 size=0x4000 prot=1
+base=0x82DF80000 end=0x82DF94000

@@ -1,0 +1,9 @@
+
+xcp: =============================================
+xcp: virtual-pad payload starting
+xcp: sizeof(OrbisPadData) = 120
+xcp: log file: /data/xcp_payload.log
+xcp: =============================================
+xcp: sceUsbd init ok
+xcp: usb: 1 device(s) visible
+xcp:   usb[0] 054C:05C4 054C:05C4 (none)

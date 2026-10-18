@@ -1,0 +1,24 @@
+xcp: =============================================
+xcp: plugin v1.00 starting
+xcp: =============================================
+xcp: load /mnt/sandbox/NPXS40112_000/common/lib/libScePad.sprx -> 0x00000002
+xcp: load /mnt/sandbox/NPXS40112_000/common/lib/libSceUserService.sprx -> 0x00000003
+xcp: load /mnt/sandbox/NPXS40112_000/common/lib/libSceUsbd.sprx -> 0x00000004
+xcp: sceUsbd init ok
+xcp: hooks installed
+xcp: ready. player 1 = the first pad the game opens.
+xcp: scePadOpen(user=1 type=0 index=0) -> handle 1
+xcp: player 1 slot claimed (handle=1 user=1 type=0 index=0)
+xcp: opened 045E:028E as Xbox 360
+xcp: pad ready: 045E:028E (Xbox 360)
+xcp: xbox pad connected
+xcp: xcpcapture 0000 00 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+xcp: xcpcapture 0001 00 14 00 10 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+xcp: xcpcapture 0002 00 14 00 12 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+xcp: xcpcapture 0003 00 14 09 30 00 00 40 1F 20 1F 10 1F 30 1F 00 00 00 00 00 00
+xcp: xcpcapture 0004 00 14 00 40 FF 00 FF 7F FF 7F FF 7F FF 7F 00 00 00 00 00 00
+
+# ^ This is a paste of real klog, exactly as it appears. Lines that are not
+#   capture lines are ignored by the parser. Feed it to:
+#     ./build/xcp_inspector --play samples/klog-capture-example.txt
+#   Only 5 reports here for brevity; the plugin logs 24.

@@ -1,0 +1,29 @@
+
+xcp: =============================================
+xcp: virtual-pad payload starting
+xcp: sizeof(OrbisPadData) = 120
+xcp: log file: /data/xcp_payload.log
+xcp: =============================================
+xcp: sceUsbd init ok
+xcp: usb: 2 device(s) visible
+xcp:   usb[0] 054C:05C4 054C:05C4 (none)
+xcp:   usb[1] 045E:028E 045E:028E (Xbox 360)
+xcp: device: 1 interface(s), config value 1
+xcp:   iface 0: class FF sub 5D proto 01, 2 endpoint(s)
+xcp:     ep 0x81 interrupt IN maxpacket 32 interval 4
+xcp:     endpoint 1: bLength 0 is not a 7 byte descriptor, skipped
+xcp:   claim iface 0 -> 0
+xcp: reading interrupt IN on EP 0x81 of interface 0
+xcp: opened 045E:028E as Xbox 360
+xcp: input source ready: 045E:028E (Xbox 360)
+xcp: sceKernelLoadStartModule(/system/common/lib/libSceMbus.sprx) = 0x0000E1A6
+xcp: libSceMbus handle = 0x0000E1A6
+xcp: scePadInit() = 0x00000000
+xcp: scePadSetProcessPrivilege(1) = 0x00000000
+xcp: vda patch: vda=800895b40 base=800890000 callsite=800895c00 cave=800892f21
+xcp: vda patch: applied (cave stub + retargeted call)
+xcp: marker add
+xcp: AddDevice(size=32 user=1 type=3) = 0x00000000
+xcp: klog pad-added: <118>#LOGIN MGR# Receive Event : SCE_MBUS_EVENT_DEVICE_ADDED [DeviceId:0x8030d][type:1][subType:2]
+xcp:   parsed DeviceId = 0x8030D
+xcp: device adopted: DeviceId=0x8030D handle=0x0008030D

@@ -1,0 +1,5 @@
+module libScePad name=libScePad.sprx segs=3
+seg[0] addr=8227f8000 size=0xC000 prot=5
+seg[1] addr=822808000 size=0x8000 prot=3
+seg[2] addr=822804000 size=0x4000 prot=1
+base=0x8227F8000 end=0x822810000

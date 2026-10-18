@@ -1,0 +1,11 @@
+# Reports that MUST be rejected, for: xcp_inspector --play samples/xbox360-reports-bad.txt
+# Exit code 2 with "2 rejected" is the expected, correct result here.
+
+# wrong message type (0x01, not 0x00)
+bad-type           01 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+# wrong length field (0x13, not 0x14)
+bad-length         00 13 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+# too short to be any known report
+too-short          00 14 00 10
