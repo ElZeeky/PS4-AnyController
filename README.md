@@ -4,6 +4,7 @@
 [![Payload binary: GPL-3.0](https://img.shields.io/badge/payload_binary-GPL--3.0-orange.svg)](NOTICE)
 [![Firmware: 11.00](https://img.shields.io/badge/firmware-11.00-informational.svg)](#requirements)
 [![Platform: PS4 · GoldHEN](https://img.shields.io/badge/platform-PS4_%7C_GoldHEN-003791.svg)](#requirements)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/4TtyCpdgFq)
 
 Use **any wired third-party controller** as **PLAYER 1** on a jailbroken **PS4** — in every
 screen: home, settings, sign-in and games. A real DualShock 4 can stay connected and usable.
@@ -157,6 +158,13 @@ real report and runs it through the same decoder the console runs. See
   only in the payload process's RAM.
 
 Deploying is deliberately a manual step; nothing here touches your console on its own.
+
+---
+
+## Community
+
+Want to help the project — testing on other firmware or controllers, bug reports, or code?
+Join the [Discord](https://discord.gg/4TtyCpdgFq).
 
 ---
 
