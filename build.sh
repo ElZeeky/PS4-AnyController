@@ -13,6 +13,7 @@
 #   ./build.sh payload     cross compile the PS4 payload ELF
 #                          `payload --check` compiles only, so it works without
 #                          the ps4-payload-sdk installed
+#                          `payload dump` builds the firmware dumper instead
 #   ./build.sh package      assemble release/ ready to drag to the console via FTP
 #
 # Environment:
@@ -125,19 +126,28 @@ cmd_clean() {
 # it is generated, so it lives outside version control (see .gitignore).
 cmd_package() {
   local elf="$BUILD/ps4/AnyController.elf"
+  local dumper="$BUILD/ps4/AnyController-dumper.elf"
   [ -f "$elf" ] || die "no payload yet - run ./build.sh payload first"
   [ -f "$ROOT/packaging/INSTALL.txt" ] || die "packaging/INSTALL.txt missing"
+  [ -f "$ROOT/packaging/DUMPER.txt" ] || die "packaging/DUMPER.txt missing"
+
+  if [ ! -f "$dumper" ]; then
+    say "dumper not built yet; building it"
+    "$ROOT/ps4/build_payload.sh" dump
+  fi
 
   say "assembling release/"
   rm -rf "$ROOT/release"
   mkdir -p "$ROOT/release"
-  cp "$elf" "$ROOT/release/AnyController.elf"
-  cp "$ROOT/packaging/INSTALL.txt"  "$ROOT/release/INSTALL.txt"
+  cp "$elf"    "$ROOT/release/AnyController.elf"
+  cp "$dumper" "$ROOT/release/AnyController-dumper.elf"
+  cp "$ROOT/packaging/INSTALL.txt" "$ROOT/release/INSTALL.txt"
+  cp "$ROOT/packaging/DUMPER.txt"  "$ROOT/release/DUMPER.txt"
 
   printf '\n'
   ls -l "$ROOT/release"
   printf '\n  release/ is ready. Drag its contents to the console over FTP;\n'
-  printf '  read release/INSTALL.txt for the steps.\n'
+  printf '  read release/INSTALL.txt for the steps (DUMPER.txt is for contributors).\n'
 }
 
 case "${1:-test}" in

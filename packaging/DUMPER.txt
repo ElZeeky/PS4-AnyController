@@ -1,0 +1,35 @@
+AnyController-dumper.elf - firmware offsets helper
+==================================================
+
+This is a diagnostic payload for contributors. You do not need it to play.
+
+It reads a few bytes of libScePad and libSceMbus so the virtual-pad patch can be
+ported to a different firmware. It never creates a device and never touches your
+controllers.
+
+
+How to run
+----------
+
+1. Copy AnyController-dumper.elf to /data/payloads/ on the console, the same way
+   as the main payload (see INSTALL.txt).
+2. Run it once from GoldHEN -> Utilities -> Payloader LaunchPad.
+3. It writes these files to /data/:
+
+       xcp_dump.log
+       scePadVirtualDeviceAddDevice.bin
+       scePadInit.bin
+       sceMbusDisconnectDevice.bin
+       sceMbusBindDeviceWithUserId.bin
+
+4. Send the log and the .bin files to the project maintainer (privately).
+
+
+Do NOT publish the .bin files
+-----------------------------
+
+They contain small excerpts of Sony's copyrighted system code. Keep them private,
+use them only to compute the offsets, and delete them afterwards. Publishing them
+can get the project taken down.
+
+The dumper tool itself is fine to share; its output is not.

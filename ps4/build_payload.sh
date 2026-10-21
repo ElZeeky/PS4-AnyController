@@ -55,7 +55,7 @@ if [ "$HELLO" = "1" ]; then
 fi
 if [ "$DUMP" = "1" ]; then
   OBJ="$OUT/obj-dump"
-  NAME="xcp_dump"
+  NAME="AnyController-dumper"
 fi
 
 say() { printf '\033[1m== %s\033[0m\n' "$*"; }
