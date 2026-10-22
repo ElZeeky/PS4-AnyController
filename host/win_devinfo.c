@@ -1,7 +1,8 @@
 /*
  * host/win_devinfo.c - see win_devinfo.h.
  *
- * Read-only: opening keys, never a device. Requires no administrator rights.
+ * Read-only: opening sysfs/registry keys, never a device. Requires no
+ * administrator rights.
  */
 #include "win_devinfo.h"
 
@@ -143,7 +144,196 @@ int xcp_enumerate_available(void)
     return 1;
 }
 
-#else /* !_WIN32 */
+#elif defined(__linux__)
+
+#include <dirent.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static void xcp_linux_trim(char *s)
+{
+    size_t n = strlen(s);
+
+    while (n > 0) {
+        char c = s[n - 1];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+            break;
+        }
+        s[--n] = '\0';
+    }
+}
+
+static int xcp_linux_read_text(const char *path, char *out, size_t size)
+{
+    FILE *f = fopen(path, "r");
+
+    if (!f || !out || size == 0) {
+        if (f) fclose(f);
+        return 0;
+    }
+    if (!fgets(out, (int)size, f)) {
+        fclose(f);
+        return 0;
+    }
+    fclose(f);
+    xcp_linux_trim(out);
+    return 1;
+}
+
+static int xcp_linux_read_hex(const char *path, unsigned *out)
+{
+    char          text[32];
+    char         *end = NULL;
+    unsigned long v;
+
+    if (!xcp_linux_read_text(path, text, sizeof(text))) {
+        return 0;
+    }
+    v = strtoul(text, &end, 16);
+    if (end == text || v > 0xFFFFul) {
+        return 0;
+    }
+    *out = (unsigned)v;
+    return 1;
+}
+
+static void xcp_linux_entry(xcp_dev_entry *e, const char *group,
+                            const char *desc, const char *instance,
+                            unsigned vid, unsigned pid, int has_ids)
+{
+    memset(e, 0, sizeof(*e));
+    snprintf(e->group, sizeof(e->group), "%s", group);
+    snprintf(e->desc, sizeof(e->desc), "%s", desc);
+    snprintf(e->instance, sizeof(e->instance), "%s", instance);
+    e->vid = (uint16_t)vid;
+    e->pid = (uint16_t)pid;
+    e->has_ids = has_ids;
+}
+
+int xcp_enumerate_devices(xcp_dev_entry *out, int max)
+{
+    DIR           *dir;
+    struct dirent *ent;
+    int            count = 0;
+
+    if (!out || max <= 0) {
+        return 0;
+    }
+
+    dir = opendir("/sys/class/hidraw");
+    if (dir) {
+        while ((ent = readdir(dir)) != NULL && count < max) {
+            char     uevent[PATH_MAX];
+            char     line[512];
+            char     name[XCP_DEV_DESC_MAX] = "";
+            unsigned vid = 0;
+            unsigned pid = 0;
+            int      have_id = 0;
+            FILE    *f;
+
+            if (strncmp(ent->d_name, "hidraw", 6) != 0) {
+                continue;
+            }
+            snprintf(uevent, sizeof(uevent),
+                     "/sys/class/hidraw/%s/device/uevent", ent->d_name);
+            f = fopen(uevent, "r");
+            if (!f) {
+                continue;
+            }
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "HID_NAME=", 9) == 0) {
+                    snprintf(name, sizeof(name), "%s", line + 9);
+                    xcp_linux_trim(name);
+                } else if (strncmp(line, "HID_ID=", 7) == 0) {
+                    const char *c1 = strchr(line + 7, ':');
+                    const char *c2 = c1 ? strchr(c1 + 1, ':') : NULL;
+
+                    if (c1 && c2) {
+                        vid = (unsigned)strtoul(c1 + 1, NULL, 16);
+                        pid = (unsigned)strtoul(c2 + 1, NULL, 16);
+                        have_id = 1;
+                    }
+                }
+            }
+            fclose(f);
+            if (!have_id) {
+                continue;
+            }
+
+            {
+                char instance[64];
+                char desc[XCP_DEV_DESC_MAX];
+
+                snprintf(instance, sizeof(instance), "/dev/%s", ent->d_name);
+                snprintf(desc, sizeof(desc), "%s",
+                         name[0] ? name : "(no name)");
+                xcp_linux_entry(&out[count], "hidraw", desc, instance,
+                                vid, pid, 1);
+                count++;
+            }
+        }
+        closedir(dir);
+    }
+
+    dir = opendir("/sys/bus/usb/devices");
+    if (dir) {
+        while ((ent = readdir(dir)) != NULL && count < max) {
+            char     path[PATH_MAX];
+            char     product[XCP_DEV_DESC_MAX] = "";
+            char     manufacturer[XCP_DEV_DESC_MAX] = "";
+            unsigned vid = 0;
+            unsigned pid = 0;
+
+            if (ent->d_name[0] == '.') {
+                continue;
+            }
+            snprintf(path, sizeof(path), "/sys/bus/usb/devices/%s/idVendor",
+                     ent->d_name);
+            if (!xcp_linux_read_hex(path, &vid)) {
+                continue;
+            }
+            snprintf(path, sizeof(path), "/sys/bus/usb/devices/%s/idProduct",
+                     ent->d_name);
+            if (!xcp_linux_read_hex(path, &pid)) {
+                continue;
+            }
+            snprintf(path, sizeof(path), "/sys/bus/usb/devices/%s/product",
+                     ent->d_name);
+            (void)xcp_linux_read_text(path, product, sizeof(product));
+            snprintf(path, sizeof(path),
+                     "/sys/bus/usb/devices/%s/manufacturer",
+                     ent->d_name);
+            (void)xcp_linux_read_text(path, manufacturer,
+                                      sizeof(manufacturer));
+
+            {
+                char desc[XCP_DEV_DESC_MAX];
+
+                if (product[0]) {
+                    snprintf(desc, sizeof(desc), "%s", product);
+                } else if (manufacturer[0]) {
+                    snprintf(desc, sizeof(desc), "%s", manufacturer);
+                } else {
+                    snprintf(desc, sizeof(desc), "USB device");
+                }
+                xcp_linux_entry(&out[count], "usb", desc, ent->d_name,
+                                vid, pid, 1);
+                count++;
+            }
+        }
+        closedir(dir);
+    }
+
+    return count;
+}
+
+int xcp_enumerate_available(void)
+{
+    return 1;
+}
+
+#else /* other platforms */
 
 int xcp_enumerate_devices(xcp_dev_entry *out, int max)
 {

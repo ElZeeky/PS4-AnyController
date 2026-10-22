@@ -8,6 +8,7 @@
 # Usage:
 #   ./build.sh test        build and run the unit tests        (default)
 #   ./build.sh cli         build the PC inspector tool
+#   ./build.sh cli-linux   cross-compile the static Linux inspector
 #   ./build.sh all         test + cli
 #   ./build.sh clean       remove build output
 #   ./build.sh payload     cross compile the PS4 payload ELF
@@ -97,7 +98,8 @@ cmd_cli() {
   mkdir -p "$BUILD"
   # Windows device enumeration goes through SetupAPI; nowhere else needs it.
   case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) extra+=("-lsetupapi") ;;
+    MINGW*|MSYS*|CYGWIN*) extra+=("-lsetupapi" "-lhid") ;;
+    Linux*) extra+=("-D_POSIX_C_SOURCE=200809L") ;;
   esac
   # Without -DXCP_HAVE_HIDAPI the CLI still runs its replay/script modes.
   if [ "${XCP_HAVE_HIDAPI:-0}" = "1" ]; then
@@ -107,6 +109,34 @@ cmd_cli() {
   "${CC_CMD[@]}" "${STD[@]}" "${WARN[@]}" "${INCLUDES[@]}" "${extra[@]}" \
     -o "$BUILD/AnyController-Inspector" \
     "${src[@]}" "${hid_src[@]}" "${cli_src[@]}"
+}
+
+# Cross-compiled, static Linux build of the same inspector. Zig is the only
+# compiler here that can target Linux from this Windows checkout.
+cmd_cli_linux() {
+  local src
+  local out="$BUILD/AnyController-Inspector-linux-x86_64"
+  local zig
+
+  if [ -x "$ROOT/.tools/zig/zig.exe" ]; then
+    zig="$ROOT/.tools/zig/zig.exe"
+  elif [ -x "$ROOT/.tools/zig/zig" ]; then
+    zig="$ROOT/.tools/zig/zig"
+  elif command -v zig >/dev/null 2>&1; then
+    zig="$(command -v zig)"
+  else
+    die "zig is required to build the Linux inspector"
+  fi
+
+  say "cross-compiling Linux inspector with: $zig cc"
+  mkdir -p "$BUILD"
+  mapfile -t src < <(portable_src)
+  "$zig" cc "${STD[@]}" "${WARN[@]}" "${INCLUDES[@]}" \
+    -D_POSIX_C_SOURCE=200809L -target x86_64-linux-musl -static \
+    -o "$out" \
+    "${src[@]}" "$ROOT"/usb/src/usb_hidapi*.c "$ROOT"/host/*.c
+  [ -f "$out" ] || die "Linux inspector was not produced"
+  say "Linux inspector: $out"
 }
 
 cmd_payload() {
@@ -128,11 +158,21 @@ cmd_package() {
   local elf="$BUILD/ps4/AnyController.elf"
   local dumper="$BUILD/ps4/AnyController-dumper.elf"
   local cli="$BUILD/AnyController-Inspector"
+  local lin="$BUILD/AnyController-Inspector-linux-x86_64"
+  local tool_doc="$ROOT/packaging/INSPECTOR.txt"
+  local cli_name="AnyController-Inspector"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cli_name="AnyController-Inspector.exe" ;;
+  esac
   [ -f "$cli" ] || cli="$BUILD/AnyController-Inspector.exe"
+  [ -f "$tool_doc" ] || tool_doc="$ROOT/packaging/PC-TOOL.txt"
   [ -f "$elf" ] || die "no payload yet - run ./build.sh payload first"
   [ -f "$ROOT/packaging/INSTALL.txt" ] || die "packaging/INSTALL.txt missing"
   [ -f "$ROOT/packaging/DUMPER.txt" ] || die "packaging/DUMPER.txt missing"
-  [ -f "$ROOT/packaging/PC-TOOL.txt" ] || die "packaging/PC-TOOL.txt missing"
+  [ -f "$ROOT/packaging/INSPECTOR-LINUX.txt" ] || die "packaging/INSPECTOR-LINUX.txt missing"
+  [ -f "$ROOT/packaging/setup-linux.sh" ] || die "packaging/setup-linux.sh missing"
+  [ -f "$ROOT/packaging/run-linux.sh" ] || die "packaging/run-linux.sh missing"
+  [ -f "$tool_doc" ] || die "packaging/INSPECTOR.txt (or PC-TOOL.txt) missing"
 
   if [ ! -f "$dumper" ]; then
     say "dumper not built yet; building it"
@@ -145,30 +185,48 @@ cmd_package() {
     [ -f "$cli" ] || cli="$BUILD/AnyController-Inspector.exe"
   fi
   [ -f "$cli" ] || die "PC inspector binary not found after build"
+  if [ -f "$BUILD/AnyController-Inspector.exe" ]; then
+    cli="$BUILD/AnyController-Inspector.exe"
+    cli_name="AnyController-Inspector.exe"
+  fi
+
+  if [ ! -f "$lin" ]; then
+    say "Linux inspector not built yet; building it"
+    cmd_cli_linux
+  fi
 
   say "assembling release/"
   rm -rf "$ROOT/release"
   mkdir -p "$ROOT/release"
   cp "$elf"    "$ROOT/release/AnyController.elf"
   cp "$dumper" "$ROOT/release/AnyController-dumper.elf"
-  cp "$cli"    "$ROOT/release/AnyController-Inspector.exe"
+  cp "$cli"    "$ROOT/release/$cli_name"
+  cp "$lin"    "$ROOT/release/AnyController-Inspector-linux-x86_64"
   cp "$ROOT/packaging/INSTALL.txt" "$ROOT/release/INSTALL.txt"
   cp "$ROOT/packaging/DUMPER.txt"  "$ROOT/release/DUMPER.txt"
-  cp "$ROOT/packaging/PC-TOOL.txt" "$ROOT/release/PC-TOOL.txt"
+  cp "$tool_doc"                   "$ROOT/release/$(basename "$tool_doc")"
+  cp "$ROOT/packaging/INSPECTOR-LINUX.txt" "$ROOT/release/INSPECTOR-LINUX.txt"
+  # Keep the Linux helpers LF-only even from a CRLF checkout.
+  tr -d '\r' < "$ROOT/packaging/setup-linux.sh" > "$ROOT/release/setup-linux.sh"
+  tr -d '\r' < "$ROOT/packaging/run-linux.sh" > "$ROOT/release/run-linux.sh"
+  chmod +x "$ROOT/release/AnyController-Inspector-linux-x86_64" \
+           "$ROOT/release/setup-linux.sh" "$ROOT/release/run-linux.sh" 2>/dev/null || true
 
   printf '\n'
   ls -l "$ROOT/release"
   printf '\n  release/ is ready. Drag its contents to the console over FTP;\n'
-  printf '  read release/INSTALL.txt for the steps (DUMPER.txt and PC-TOOL.txt\n'
+  printf '  read release/INSTALL.txt for the steps (DUMPER.txt and %s\n' \
+         "$(basename "$tool_doc")"
   printf '  are for contributors).\n'
 }
 
 case "${1:-test}" in
-  test)  cmd_test ;;
-  cli)   cmd_cli ;;
-  all)   cmd_test; cmd_cli ;;
-  payload) cmd_payload "$@" ;;
-  package) cmd_package ;;
-  clean) cmd_clean ;;
-  *)     die "unknown target: $1 (try: test, cli, all, payload, package, clean)" ;;
+  test)      cmd_test ;;
+  cli)       cmd_cli ;;
+  cli-linux) cmd_cli_linux ;;
+  all)       cmd_test; cmd_cli ;;
+  payload)   cmd_payload "$@" ;;
+  package)   cmd_package ;;
+  clean)     cmd_clean ;;
+  *)         die "unknown target: $1 (try: test, cli, cli-linux, all, payload, package, clean)" ;;
 esac

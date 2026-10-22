@@ -5,8 +5,8 @@
  * to answer "what is actually plugged in and how does it identify itself", which
  * is the first thing we need when a new controller shows up.
  *
- * On non-Windows platforms it compiles to a stub that reports "unavailable", so
- * the CLI still builds everywhere.
+ * Windows uses SetupAPI; Linux reads /sys/class/hidraw and /sys/bus/usb/devices.
+ * Other platforms compile to a stub, so the CLI still builds everywhere.
  */
 #ifndef XCP_WIN_DEVINFO_H
 #define XCP_WIN_DEVINFO_H

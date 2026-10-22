@@ -23,7 +23,8 @@
  * care should keep their previous state.
  *
  * `type` must not be XCP_CTRL_NONE. `cfg` may be NULL, meaning: defaults for
- * the controller family (xcp_config_default for Xbox, ..._switch for Switch).
+ * the controller family (xcp_config_default for Xbox, ..._switch for Switch,
+ * ..._dualsense for DualSense).
  */
 int xcp_decode(xcp_controller_type type,
                const uint8_t *buf, size_t len,

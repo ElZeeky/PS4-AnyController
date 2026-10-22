@@ -11,11 +11,13 @@
 const char *xcp_controller_type_name(xcp_controller_type type)
 {
     switch (type) {
-    case XCP_CTRL_XBOX360: return "Xbox 360";
-    case XCP_CTRL_XBOXONE: return "Xbox One/Series";
-    case XCP_CTRL_SWITCH:  return "Switch (PDP)";
+    case XCP_CTRL_XBOX360:     return "Xbox 360";
+    case XCP_CTRL_XBOXONE:     return "Xbox One";
+    case XCP_CTRL_XBOX_SERIES: return "Xbox Series";
+    case XCP_CTRL_SWITCH:      return "Switch (PDP)";
+    case XCP_CTRL_DUALSENSE:   return "DualSense";
     case XCP_CTRL_NONE:
-    default:               return "none";
+    default:                   return "none";
     }
 }
 
@@ -27,6 +29,12 @@ static const uint16_t g_xboxone_pids[] = {
     0x02EA, /* Xbox One S (USB)             */
     0x0B00, /* Xbox Elite 2                 */
     0x0B0A, /* Xbox Adaptive                */
+    0x0B12, /* Xbox Series X|S (USB)        */
+    0x0B13, /* Xbox Series X|S (Bluetooth)  */
+    0x0B20, /* 2021 Xbox pad                */
+};
+
+static const uint16_t g_xbox_series_pids[] = {
     0x0B12, /* Xbox Series X|S (USB)        */
     0x0B13, /* Xbox Series X|S (Bluetooth)  */
     0x0B20, /* 2021 Xbox pad                */
@@ -48,6 +56,20 @@ int xcp_is_xboxone_pid(uint16_t pid)
     return 0;
 }
 
+int xcp_is_xbox_series_pid(uint16_t pid)
+{
+    unsigned i;
+    for (i = 0; i < sizeof(g_xbox_series_pids) / sizeof(g_xbox_series_pids[0]); i++) {
+        if (g_xbox_series_pids[i] == pid) return 1;
+    }
+    return 0;
+}
+
+int xcp_is_dualsense_pid(uint16_t pid)
+{
+    return pid == XCP_PID_DUALSENSE || pid == XCP_PID_DUALSENSE_EDGE;
+}
+
 int xcp_is_pdp_switch_pid(uint16_t pid)
 {
     unsigned i;
@@ -61,10 +83,15 @@ xcp_controller_type xcp_controller_type_for_ids(uint16_t vid, uint16_t pid)
 {
     if (vid == XCP_VID_MICROSOFT) {
         if (pid == XCP_PID_XBOX360) return XCP_CTRL_XBOX360;
+        if (xcp_is_xbox_series_pid(pid)) return XCP_CTRL_XBOX_SERIES;
         /* 0x0719 (wireless receiver) and anything else Microsoft is treated as
          * GIP: third-party pads re-badge themselves under VID 0x045E with
          * product ids nobody has catalogued. */
         return XCP_CTRL_XBOXONE;
+    }
+
+    if (vid == XCP_VID_SONY && xcp_is_dualsense_pid(pid)) {
+        return XCP_CTRL_DUALSENSE;
     }
 
     if (vid == XCP_VID_PDP && xcp_is_pdp_switch_pid(pid)) {

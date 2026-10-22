@@ -27,4 +27,7 @@ void xcp_config_default(xcp_config *cfg);
 /* Same, but without Y inversion (the Switch pad already matches PS4 axes). */
 void xcp_config_default_switch(xcp_config *cfg);
 
+/* Same, but without Y inversion (DualSense axes already match PS4). */
+void xcp_config_default_dualsense(xcp_config *cfg);
+
 #endif /* XCP_CONFIG_H */

@@ -2,19 +2,23 @@
  * host/pc_tool.c - the PC-side tool.
  *
  * Modes:
+ *   (no arguments)      capture a controller and save the dump next to the .exe
+ *   --capture [SECONDS] same, with an explicit capture time
  *   --list              what is plugged in, and how it identifies itself
  *   --selftest          drive synthetic reports through core + router, no hardware
  *   --play FILE         decode a captured report dump written as hex text
  *   --mock              demonstrate the player-1 assignment decisions
  *   --live              read the real controller (needs a backend compiled in)
  *
- * Everything except --live works with no dependencies at all, which is what
- * makes the pipeline verifiable on a machine with no controller attached.
+ * Everything except --live and the capture modes works with no dependencies at
+ * all, which is what makes the pipeline verifiable on a machine with no
+ * controller attached.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "hid_capture.h"
 #include "win_devinfo.h"
 #include "xinput_backend.h"
 
@@ -53,7 +57,7 @@ static void cmd_list(void)
 
     if (!xcp_enumerate_available()) {
         printf("device enumeration is not available in this build\n");
-        printf("(it is implemented for Windows; elsewhere use lsusb/ioreg)\n");
+        printf("(it is implemented for Windows and Linux; elsewhere use lsusb)\n");
         return;
     }
 
@@ -89,14 +93,14 @@ static void cmd_list(void)
     if (interesting == 0) {
         printf("\nNo supported pad found.\n");
         printf("Checklist if the controller is physically plugged in:\n");
-        printf("  * put the pad in Xbox/wired mode (not Bluetooth, not Switch mode)\n");
-        printf("  * an Xbox-format pad in XInput mode is claimed by the Xbox driver\n");
-        printf("    and may not appear in the HID list at all - that is expected;\n");
-        printf("    look for a USB entry whose instance id has VID_045E\n");
+        printf("  * put the pad in wired mode (not Bluetooth, not Switch mode)\n");
+        printf("  * an Xbox-format pad in XInput/GIP mode is claimed by its\n");
+        printf("    kernel driver and may not appear in the HID list at all;\n");
+        printf("    look for a USB entry with vendor id 045E\n");
         printf("  * if nothing Xbox-shaped appears, the pad is using a vendor id we\n");
-        printf("    have not catalogued yet - paste this whole list back\n");
+        printf("    have not catalogued yet - send this whole list privately\n");
     } else {
-        printf("\nPaste this list back so the wiring can be confirmed.\n");
+        printf("\nSend this list privately so the wiring can be confirmed.\n");
     }
 }
 
@@ -248,6 +252,66 @@ static void print_state(const xcp_pad_state *s, const char *label)
            s->left_trigger, s->right_trigger, buttons);
 }
 
+/* Read a "# vid: 0x045E" / "# pid: 0x0B12" line from a capture header. */
+static int parse_header_id(const char *line, const char *key, uint16_t *out)
+{
+    const char *p = line;
+    size_t      klen = strlen(key);
+
+    while (*p == '#' || *p == ' ' || *p == '\t') p++;
+    if (strncmp(p, key, klen) != 0) return 0;
+    p += klen;
+    while (*p == ' ' || *p == '\t' || *p == ':') p++;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+
+    {
+        char         *end = NULL;
+        unsigned long v   = strtoul(p, &end, 16);
+        if (end == p || v > 0xFFFFul) return 0;
+        *out = (uint16_t)v;
+    }
+    return 1;
+}
+
+/*
+ * Payload logs say `xcp: opened 045E:0B12 as Xbox Series`. Using that line as
+ * the capture header keeps Share decoding correct when the log is pasted
+ * without the inspector's `# vid` / `# pid` header.
+ */
+static int parse_opened_line(const char *line, uint16_t *vid, uint16_t *pid)
+{
+    const char   *p = strstr(line, "opened ");
+    char         *end = NULL;
+    unsigned long v;
+    unsigned long pv;
+
+    if (!p) return 0;
+    p += 7;
+    v = strtoul(p, &end, 16);
+    if (end == p || *end != ':') return 0;
+    p = end + 1;
+    pv = strtoul(p, &end, 16);
+    if (end == p || v > 0xFFFFul || pv > 0xFFFFul) return 0;
+
+    *vid = (uint16_t)v;
+    *pid = (uint16_t)pv;
+    return 1;
+}
+
+/*
+ * A DualShock 4 also starts with report id 0x01. If the header names one, do
+ * not pretend it is a DualSense. Unknown ids are different: the capture may be
+ * a brand-new pad, so guess from the bytes and say so once.
+ */
+static int xcp_is_known_unsupported_pad(uint16_t vid, uint16_t pid)
+{
+    if (vid != XCP_VID_SONY) {
+        return 0;
+    }
+    return pid == 0x05C4u || pid == 0x09CCu || pid == 0x0BA0u ||
+           pid == 0x0268u;
+}
+
 static int cmd_play(const char *path)
 {
     FILE  *f;
@@ -255,7 +319,16 @@ static int cmd_play(const char *path)
     int    lineno = 0;
     int    decoded = 0;
     int    rejected = 0;
+    int    warned_unknown = 0;
+    uint32_t seen_buttons = 0;
+    uint8_t  lx_min = 255, lx_max = 0;
+    uint8_t  ly_min = 255, ly_max = 0;
+    uint8_t  rx_min = 255, rx_max = 0;
+    uint8_t  ry_min = 255, ry_max = 0;
+    uint8_t  lt_peak = 0, rt_peak = 0;
     xcp_controller_type forced = XCP_CTRL_NONE;
+    uint16_t header_vid = 0;
+    uint16_t header_pid = 0;
 
     f = fopen(path, "r");
     if (!f) {
@@ -275,7 +348,16 @@ static int cmd_play(const char *path)
         xcp_controller_type type;
 
         lineno++;
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
+        if (line[0] == '#') {
+            parse_header_id(line, "vid", &header_vid);
+            parse_header_id(line, "pid", &header_pid);
+            continue;
+        }
+        if (line[0] == '\n' || line[0] == '\r') continue;
+
+        if (parse_opened_line(line, &header_vid, &header_pid)) {
+            continue;
+        }
 
         if (!parse_dump_line(line, buf, sizeof(buf), &len,
                              label, sizeof(label))) {
@@ -287,25 +369,71 @@ static int cmd_play(const char *path)
             snprintf(label, sizeof(label), "%s", fallback);
         }
 
-        /* Guess the protocol from the report itself unless forced. */
+        /*
+         * Prefer the ids from the capture header: a Series report and a plain
+         * Xbox One report are the same wire format, so the bytes alone cannot
+         * tell us whether the Share byte at the end should be decoded.
+         *
+         * A known-but-unsupported Sony pad (DS4) is rejected because it also
+         * starts with 0x01 and would otherwise decode as a DualSense. An
+         * unknown id pair is a new pad, so guess from the bytes and say so.
+         */
         if (forced != XCP_CTRL_NONE) {
             type = forced;
-        } else if (xcp_report_looks_valid(XCP_CTRL_XBOX360, buf, len)) {
-            type = XCP_CTRL_XBOX360;
-        } else if (xcp_report_looks_valid(XCP_CTRL_XBOXONE, buf, len)) {
-            type = XCP_CTRL_XBOXONE;
-        } else if (len == XCP_SWITCH_REPORT_SIZE) {
-            type = XCP_CTRL_SWITCH;
         } else {
-            /* Name the expected size: a pasted klog line that got wrapped or
-             * truncated is the likeliest reason to land here. */
-            printf("  %-*.*s %2zu bytes  REJECTED (no protocol matches; "
-                   "Xbox 360 needs %d, Xbox One %d, Switch %d)\n",
-                   XCP_LABEL_WIDTH, XCP_LABEL_WIDTH, label, len,
-                   XCP_XBOX360_REPORT_SIZE, XCP_XBOXONE_REPORT_SIZE,
-                   XCP_SWITCH_REPORT_SIZE);
-            rejected++;
-            continue;
+            xcp_controller_type hint =
+                xcp_controller_type_for_ids(header_vid, header_pid);
+            int have_header_ids = (header_vid != 0 || header_pid != 0);
+
+            if (hint != XCP_CTRL_NONE) {
+                if (xcp_report_looks_valid(hint, buf, len)) {
+                    type = hint;
+                } else {
+                    printf("  %-*.*s %2zu bytes  REJECTED (%s report size "
+                           "does not match)\n",
+                           XCP_LABEL_WIDTH, XCP_LABEL_WIDTH, label, len,
+                           type_label(hint));
+                    rejected++;
+                    continue;
+                }
+            } else if (have_header_ids &&
+                       xcp_is_known_unsupported_pad(header_vid, header_pid)) {
+                printf("  %-*.*s %2zu bytes  REJECTED (%04X:%04X is a "
+                       "DualShock or an unsupported Sony pad)\n",
+                       XCP_LABEL_WIDTH, XCP_LABEL_WIDTH, label, len,
+                       header_vid, header_pid);
+                rejected++;
+                continue;
+            } else {
+                if (have_header_ids && !warned_unknown) {
+                    printf("  note: %04X:%04X is not a known pad; guessing "
+                           "from the report bytes\n",
+                           header_vid, header_pid);
+                    warned_unknown = 1;
+                }
+                if (xcp_report_looks_valid(XCP_CTRL_XBOX360, buf, len)) {
+                    type = XCP_CTRL_XBOX360;
+                } else if (xcp_report_looks_valid(XCP_CTRL_DUALSENSE, buf,
+                                                  len)) {
+                    type = XCP_CTRL_DUALSENSE;
+                } else if (xcp_report_looks_valid(XCP_CTRL_XBOXONE, buf,
+                                                  len)) {
+                    type = XCP_CTRL_XBOXONE;
+                } else if (len == XCP_SWITCH_REPORT_SIZE) {
+                    type = XCP_CTRL_SWITCH;
+                } else {
+                    /* Name the expected size: a pasted klog line that got
+                     * wrapped or truncated is the likeliest reason. */
+                    printf("  %-*.*s %2zu bytes  REJECTED (no protocol "
+                           "matches; Xbox 360 %d, Xbox One/Series %d, "
+                           "Switch %d, DualSense >= %d)\n",
+                           XCP_LABEL_WIDTH, XCP_LABEL_WIDTH, label, len,
+                           XCP_XBOX360_REPORT_SIZE, XCP_XBOXONE_REPORT_SIZE,
+                           XCP_SWITCH_REPORT_SIZE, XCP_DUALSENSE_MIN_SIZE);
+                    rejected++;
+                    continue;
+                }
+            }
         }
 
         if (!xcp_decode(type, buf, len, NULL, &s)) {
@@ -318,11 +446,44 @@ static int cmd_play(const char *path)
         printf("  [%s] ", type_label(type));
         print_state(&s, label);
         decoded++;
+
+        seen_buttons |= s.buttons;
+        if (s.left_x  < lx_min) lx_min = s.left_x;
+        if (s.left_x  > lx_max) lx_max = s.left_x;
+        if (s.left_y  < ly_min) ly_min = s.left_y;
+        if (s.left_y  > ly_max) ly_max = s.left_y;
+        if (s.right_x < rx_min) rx_min = s.right_x;
+        if (s.right_x > rx_max) rx_max = s.right_x;
+        if (s.right_y < ry_min) ry_min = s.right_y;
+        if (s.right_y > ry_max) ry_max = s.right_y;
+        if (s.left_trigger  > lt_peak) lt_peak = s.left_trigger;
+        if (s.right_trigger > rt_peak) rt_peak = s.right_trigger;
     }
 
     fclose(f);
 
     printf("\n%d report(s) decoded, %d rejected\n", decoded, rejected);
+
+    if (decoded == 0) {
+        if (rejected == 0) {
+            printf("\nNo reports found. The capture is empty or the wrong file.\n");
+        }
+        return rejected == 0 ? 1 : 2;
+    }
+
+    {
+        char buttons[192];
+
+        xcp_pad_state_format_buttons(seen_buttons, buttons, sizeof(buttons));
+        printf("\ncoverage of this capture:\n");
+        printf("  buttons  : [%s]\n", buttons[0] ? buttons : "");
+        printf("  left     : X %3u..%3u  Y %3u..%3u\n",
+               lx_min, lx_max, ly_min, ly_max);
+        printf("  right    : X %3u..%3u  Y %3u..%3u\n",
+               rx_min, rx_max, ry_min, ry_max);
+        printf("  triggers : L2 max %3u  R2 max %3u\n", lt_peak, rt_peak);
+    }
+
     return rejected == 0 ? 0 : 2;
 }
 
@@ -768,6 +929,8 @@ static void usage(void)
 {
     printf("AnyController-Inspector - PC side of the PS4 player-1 payload\n\n");
     printf("usage:\n");
+    printf("  (no arguments)         capture a controller and analyze it automatically\n");
+    printf("  --capture [SECONDS]    capture only (default 30)\n");
     printf("  --list                 show attached HID/USB devices and what we make of them\n");
     printf("  --selftest             run synthetic reports through core + router\n");
     printf("  --play FILE            decode a hex report dump\n");
@@ -778,8 +941,34 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-    const char *cmd = argc > 1 ? argv[1] : "--help";
+    const char *cmd = argc > 1 ? argv[1] : NULL;
 
+    if (!cmd) {
+        char path[1024];
+
+        if (!xcp_hid_capture_available()) {
+            fprintf(stderr, "raw HID capture is not available on this "
+                            "platform.\n");
+            fprintf(stderr, "Use --play with a capture or a payload log.\n");
+            return 1;
+        }
+        if (xcp_hid_capture_auto(30, path, sizeof(path)) != 0) {
+            return 1;
+        }
+        printf("\nAnalyzing the capture...\n");
+        return cmd_play(path);
+    }
+    if (strcmp(cmd, "--capture") == 0) {
+        char path[1024];
+
+        if (!xcp_hid_capture_available()) {
+            fprintf(stderr, "raw HID capture is not available on this "
+                            "platform.\n");
+            return 1;
+        }
+        return xcp_hid_capture_auto(argc > 2 ? atoi(argv[2]) : 30,
+                                    path, sizeof(path));
+    }
     if (strcmp(cmd, "--list") == 0) {
         cmd_list();
         return 0;

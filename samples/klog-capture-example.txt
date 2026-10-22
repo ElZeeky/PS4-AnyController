@@ -20,5 +20,5 @@ xcp: xcpcapture 0004 00 14 00 40 FF 00 FF 7F FF 7F FF 7F FF 7F 00 00 00 00 00 00
 
 # ^ This is a paste of real klog, exactly as it appears. Lines that are not
 #   capture lines are ignored by the parser. Feed it to:
-#     ./build/xcp_inspector --play samples/klog-capture-example.txt
+#     ./build/AnyController-Inspector --play samples/klog-capture-example.txt
 #   Only 5 reports here for brevity; the plugin logs 24.

@@ -1,0 +1,114 @@
+AnyController-Inspector for Linux
+=================================
+
+This is the same report analyzer as the Windows tool, using /dev/hidraw.
+It has no external dependencies: it is a static x86_64 binary. You only need
+the AnyController-Inspector-linux-x86_64 file to run it.
+
+Run it with only the binary
+---------------------------
+
+Open a terminal in the folder that contains the binary and run:
+
+    chmod +x AnyController-Inspector-linux-x86_64
+    sudo ./AnyController-Inspector-linux-x86_64
+
+sudo is only needed to read /dev/hidraw*, because those devices are normally
+root-only. The tool does not install anything and does not need a driver.
+
+With no arguments it scans for a gamepad, captures for 30 seconds, writes
+
+    AnyController-capture-XXXX-YYYY.txt
+
+next to the executable, then decodes it automatically and prints the buttons
+and stick ranges it saw.
+
+While it captures, press every button once, move both sticks to every edge and
+pull both triggers slowly. Only changes are saved.
+
+You can also run the other modes directly:
+
+    ./AnyController-Inspector-linux-x86_64 --capture 45
+    ./AnyController-Inspector-linux-x86_64 --list
+    ./AnyController-Inspector-linux-x86_64 --play FILE
+    ./AnyController-Inspector-linux-x86_64 --selftest
+
+--capture N  capture only, for N seconds.
+--list       show HID/USB devices and what we make of them.
+--play FILE  decode a capture or a payload log.
+--selftest   no-hardware sanity check.
+
+If you run it without sudo and it says "No permission to read /dev/hidrawN",
+either use sudo or install the optional udev rule described below.
+
+Optional: avoid sudo
+--------------------
+
+setup-linux.sh installs one udev rule so your user can read /dev/hidraw*
+without sudo. It is optional; the binary works with sudo on its own.
+
+    chmod +x setup-linux.sh
+    ./setup-linux.sh
+
+Then unplug/replug the controller and run:
+
+    ./AnyController-Inspector-linux-x86_64
+
+run-linux.sh is also optional. It is only a small wrapper that starts the
+binary from its own folder:
+
+    chmod +x run-linux.sh
+    ./run-linux.sh
+    ./run-linux.sh --capture 45
+
+SteamOS and other read-only systems may refuse the udev rule; the sudo form
+still works.
+
+What to send back
+-----------------
+
+1. The AnyController-capture-XXXX-YYYY.txt file.
+2. The controller model and, if you know it, the USB VID:PID.
+3. Whether it is original or a clone, and whether it is wired or wireless.
+4. What worked and what did not on the console (if you tested the payload).
+
+The capture is small and contains only controller state. It also has a
+"# path:" line with the local device path; delete that line if you prefer.
+Send logs and firmware .bin dumps privately, never in a public issue.
+
+Controllers that do not use HID
+-------------------------------
+
+DualSense, DualShock, Switch and generic HID pads appear as /dev/hidraw*.
+
+Xbox 360/One/Series in XInput/GIP mode usually do not expose /dev/hidraw because
+the kernel driver claims them. For those, capture on the console instead:
+
+    /data/AnyController.log
+
+and decode it with:
+
+    ./AnyController-Inspector-linux-x86_64 --play AnyController.log
+
+The log records the first few reports for the opened pad; the console prompt
+tells you when the capture is complete. It is enough to identify the report
+format, but for full button mapping the /dev/hidraw capture is better.
+
+Troubleshooting
+---------------
+
+"No HID devices found" or "none look like a gamepad" but the controller is
+plugged in:
+  * run the binary with sudo;
+  * or run ./setup-linux.sh once, then unplug/replug the controller;
+  * run --list to see whether Linux exposes it at all;
+  * Xbox pads in XInput/GIP mode are expected not to appear here.
+
+"No permission to read /dev/hidrawN":
+  * use sudo, or the udev rule from setup-linux.sh is not active.
+
+"cannot execute binary file":
+  * this build is for x86_64 Linux only; it does not run on ARM.
+
+A capture is written next to the executable. If that folder is read-only, run
+the tool from a writable folder or copy the binary there first.

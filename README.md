@@ -6,8 +6,8 @@
 [![Platform: PS4 · GoldHEN](https://img.shields.io/badge/platform-PS4_%7C_GoldHEN-003791.svg)](#requirements)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/4TtyCpdgFq)
 
-Use **any wired third-party controller** as **PLAYER 1** on a jailbroken **PS4** — in every
-screen: home, settings, sign-in and games. A real DualShock 4 can stay connected and usable.
+Use **any wired controller** as **PLAYER 1** on a jailbroken **PS4** — in every screen:
+home, settings, sign-in and games. A real DualShock 4 can stay connected and usable.
 
 It runs as a **GoldHEN payload** (`AnyController.elf`) and creates a **virtual DualShock 4**
 through Sony's own virtual-device API, so the system itself sees your controller
@@ -30,15 +30,16 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
   virtual-device API is unavailable it says so and stops, touching nothing.
 - **No permanence** — the firmware-specific patch lives only in the payload process's RAM;
   nothing is written outside `/data/`.
-- **Testable off-console** — a PC inspector exercises the same decoder (66 tests / 319 checks).
+- **Testable off-console** — a PC inspector exercises the same decoder (72 tests / 379 checks).
 
 ---
 
 ## Requirements
 
 - A PS4 on firmware **11.00** with **GoldHEN v2.4b18.10 or later**.
-- A **wired third-party controller**. The decoder understands the Xbox 360, Xbox One and
-  Switch controller report layouts, including clones that use them.
+- A **wired controller**. The decoder understands the Xbox 360, Xbox One/Series,
+  DualSense/DualSense Edge and Switch controller report layouts, including clones that use
+  them.
 - A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional afterwards.
 - A way to copy one file over FTP (e.g. FileZilla).
 
@@ -53,13 +54,15 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
 4. Optional: add it to AutoRun so it starts on boot — see
    [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
 
-`./build.sh package` assembles a ready-to-drag **`release/`** folder (payload + `INSTALL.txt`).
+`./build.sh package` assembles a ready-to-drag **`release/`** folder (payload + `INSTALL.txt` +
+Windows and Linux inspectors).
 Full walkthrough: [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
 
 ### Good to know
 
-- **Touchpad click** — your controller has none, so the virtual DS4's click is fired by an
-  **L3+R3 chord** (program a back button to an `L3+R3` macro).
+- **Touchpad click** — the DualSense's own click passes straight through; on a controller
+  without one, the virtual DS4's click is fired by an **L3+R3 chord** (program a back button
+  to an `L3+R3` macro). The Xbox Series **Share** button also works (as the DS4 Share).
 - **Stopping it** — the payload has no in-console stop; **reboot** to stop it for good.
   Turning the controller off removes the virtual pad but leaves the payload running.
 
@@ -89,10 +92,11 @@ Everything goes through `build.sh`. It finds a portable Zig automatically and fa
 
 ```bash
 scripts/fetch_vendor.sh      # clone the reference repos at pinned revisions
-./build.sh test              # run the 66 unit tests
-./build.sh cli               # build the PC inspector (host/)
+./build.sh test              # run the 72 unit tests
+./build.sh cli               # build the PC inspector for this machine (host/)
+./build.sh cli-linux         # cross-compile the static Linux inspector
 ./build.sh payload           # cross-compile the payload -> build/ps4/AnyController.elf
-./build.sh package           # assemble release/ for the console
+./build.sh package           # assemble release/ (payload + both inspectors)
 ```
 
 `./build.sh payload` needs **Zig**, **Python** and the **OpenOrbis** toolchain
@@ -112,21 +116,42 @@ so download them yourself:
 
 ## PC inspector
 
-`AnyController-Inspector` decodes and tests everything without a console. No hidapi, no libusb,
-no Zadig, no driver swap — it uses the Windows APIs directly.
+`AnyController-Inspector` captures a controller and decodes everything without a console. No
+hidapi, no libusb, no Zadig, no driver swap — Windows uses SetupAPI, Linux uses
+`/dev/hidraw` directly.
+
+Double-click it (or run it with no arguments) and it scans for a controller, captures 30 seconds
+of raw reports, writes `AnyController-capture-XXXX-YYYY.txt` next to the executable, then
+decodes it automatically and prints the buttons and stick ranges it saw. Press every button and
+move both sticks while it runs. That file is what to send when reporting a new pad.
 
 ```bash
-./build/xcp_inspector --list                  # what is plugged in and what we make of it
-./build/xcp_inspector --selftest              # synthetic reports through the whole pipeline
-./build/xcp_inspector --mock                  # the player-1 policy decisions, no hardware
-./build/xcp_inspector --play FILE             # decode a captured report dump
-./build/xcp_inspector --live 20               # read the real pad, then print coverage
+./build/AnyController-Inspector                # capture + analyze automatically
+./build/AnyController-Inspector --capture 45   # capture only, explicit duration
+./build/AnyController-Inspector --list         # what is plugged in and what we make of it
+./build/AnyController-Inspector --selftest     # synthetic reports through the whole pipeline
+./build/AnyController-Inspector --mock         # the player-1 policy decisions, no hardware
+./build/AnyController-Inspector --play FILE    # decode a capture or a payload log
+./build/AnyController-Inspector --live 20      # Windows only: read the real pad, print coverage
 ```
+
+On Linux, use `build/AnyController-Inspector-linux-x86_64`, or the packaged
+`setup-linux.sh` / `run-linux.sh` pair. `setup-linux.sh` installs one udev rule so
+`/dev/hidraw*` is readable without sudo; `run-linux.sh` starts the tool from its own folder.
+Xbox 360/One/Series in XInput/GIP mode usually do not expose `/dev/hidraw`, so use the payload
+log `/data/AnyController.log` with `--play` for those.
 
 `--live` is a real cross-check: Windows exposes the pad's semantic state through XInput,
 whose button mask is byte-identical to the Xbox 360 wire mask, so the tool packs it into a
 real report and runs it through the same decoder the console runs. See
-`samples/xbox360-reports.txt` for a worked example of the byte layout.
+`samples/xbox360-reports.txt` for a worked example of the byte layout, and
+`samples/dualsense-reports.txt` / `samples/xbox-series-reports.txt` for the new ones.
+Capture files carry their VID/PID in the header, so `--play` picks the right protocol
+even when two pads share the same report id or length.
+
+Captures contain only controller state, but may include a `# path:` line with a local device
+path. Delete it before sharing. Send firmware logs and `.bin` dumps privately, never in a public
+issue; see [`packaging/DUMPER.txt`](packaging/DUMPER.txt).
 
 ---
 
@@ -138,10 +163,10 @@ real report and runs it through the same decoder the console runs. See
 | `usb/` | open/read/close: `usb_sceusbd` (PS4), `usb_mock` (tests), `usb_common` |
 | `router/` | the player-1 decision (`router.c`), every platform call injected |
 | `mocks/` | a fake scePad/sceUserService, plus report-packing helpers |
-| `host/` | the PC-side tool (`pc_tool.c`, shipped as `AnyController-Inspector`) |
+| `host/` | the PC-side tool (`pc_tool.c`, `hid_capture.c`, shipped as `AnyController-Inspector`) |
 | `ps4/` | the payload (`payload/`), Orbis glue (`src/`), `build_payload.sh`, the libScePad patch, plus the `hello/` and `dumper/` diagnostic payloads |
-| `packaging/` | `INSTALL.txt` used to assemble `release/` |
-| `tests/` | 66 tests, 319 checks, no test-framework dependency |
+| `packaging/` | `INSTALL.txt`, `DUMPER.txt`, `INSPECTOR.txt`, and the Linux inspector helpers used to assemble `release/` |
+| `tests/` | 72 tests, 379 checks, no test-framework dependency |
 | `samples/` | hex report dumps for `--play` |
 | `docs/` | deployment guides and `docs/logs/` (real console run logs) |
 

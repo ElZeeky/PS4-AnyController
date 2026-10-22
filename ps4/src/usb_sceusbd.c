@@ -365,40 +365,63 @@ static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
     return slot;
 }
 
+static int sceusbd_is_gip(xcp_controller_type type)
+{
+    return type == XCP_CTRL_XBOXONE || type == XCP_CTRL_XBOX_SERIES;
+}
+
 static int sceusbd_start(void *ctx, void *handle, xcp_controller_type type)
 {
     /*
      * The Xbox 360 protocol needs no handshake: the pad streams 20 byte reports
      * on EP 0x81 as soon as input 0 is claimed.
      *
-     * An Xbox One / Series pad speaking GIP does need a power-on message. We
-     * write it here so a future pad that shows up as GIP has a chance, but it is
-     * UNTESTED on the console - the Manba One V2 identifies as PID 028E, i.e. the
-     * Xbox 360 protocol, so this path should never run for it.
+     * An Xbox One / Series pad speaking GIP uses the same three startup
+     * messages Linux xpad and SDL send: power-on, LED-on and "security passed".
+     * Send all three: some Series firmware does not stream after power-on
+     * alone. The sequence number in byte 2 advances for every message.
      */
-    static const uint8_t gip_power_on[5] = { 0x05, 0x20, 0x00, 0x01, 0x00 };
-    int32_t transferred = 0;
-    int32_t ret;
+    static const uint8_t gip_init[3][8] = {
+        { 0x05, 0x20, 0x00, 0x01, 0x00 },
+        { 0x0A, 0x20, 0x00, 0x03, 0x00, 0x01, 0x14 },
+        { 0x06, 0x20, 0x00, 0x02, 0x01, 0x00 },
+    };
+    static const uint8_t gip_init_len[3] = { 5, 7, 6 };
+    xcp_sceusbd_slot *slot = (xcp_sceusbd_slot *)handle;
+    int32_t           transferred = 0;
+    int32_t           ret;
+    unsigned          i;
 
     (void)ctx;
 
-    if (type != XCP_CTRL_XBOXONE) return XCP_USB_OK;
-    if (!handle) return XCP_USB_ERROR;
+    if (!sceusbd_is_gip(type)) return XCP_USB_OK;
+    if (!slot || !slot->handle) return XCP_USB_ERROR;
 
-    /* Xbox One/Series input reports live on EP 0x82 and the power-on goes to
-     * EP 0x02. */
-    ret = sceUsbdSetInterfaceAltSetting(((xcp_sceusbd_slot *)handle)->handle, 0, 0);
+    /* GIP input reports live on EP 0x82 and host messages go to EP 0x02. */
+    ret = sceUsbdSetInterfaceAltSetting(slot->handle, slot->interface, 0);
     if (ret != 0) {
-        klog(XCP_TAG "SetInterfaceAltSetting(0,0) failed (%d)\n", (int)ret);
+        klog(XCP_TAG "SetInterfaceAltSetting(%d,0) failed (%d)\n",
+             (int)slot->interface, (int)ret);
     }
 
-    ret = sceUsbdInterruptTransfer(((xcp_sceusbd_slot *)handle)->handle, 0x02,
-                                   (unsigned char *)gip_power_on,
-                                   sizeof(gip_power_on), &transferred, 100);
-    klog(XCP_TAG "GIP power-on sent, ret=%d transferred=%d\n",
-         (int)ret, (int)transferred);
+    for (i = 0; i < 3; i++) {
+        uint8_t packet[8];
+        memcpy(packet, gip_init[i], gip_init_len[i]);
+        packet[2] = (uint8_t)i;
+        transferred = 0;
 
-    return (ret == 0) ? XCP_USB_OK : XCP_USB_ERROR;
+        ret = sceUsbdInterruptTransfer(slot->handle, 0x02,
+                                       packet, gip_init_len[i],
+                                       &transferred, 100);
+        klog(XCP_TAG "GIP init %u/%u sent, ret=%d transferred=%d\n",
+             i + 1, 3u, (int)ret, (int)transferred);
+
+        /* A failed power-on means the pad will not stream; the other two are
+         * courtesy messages, so do not tear the device down if they fail. */
+        if (i == 0 && ret != 0) return XCP_USB_ERROR;
+    }
+
+    return XCP_USB_OK;
 }
 
 static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
@@ -415,10 +438,10 @@ static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
     if (buf_len == 0 || buf_len > 0x7FFFFFFF) return XCP_USB_ERROR;
 
     /* Whatever the descriptors said, if they said anything; otherwise the
-     * type's own convention: Xbox 360 and the PDP Switch pads stream on
+     * type's own convention: Xbox 360, PDP Switch and DualSense stream on
      * EP 0x81, Xbox One/Series on EP 0x82. */
     endpoint = slot->endpoint_set ? slot->endpoint
-                                  : (uint8_t)((slot->type == XCP_CTRL_XBOXONE) ? 0x82 : 0x81);
+                                  : (uint8_t)(sceusbd_is_gip(slot->type) ? 0x82 : 0x81);
 
     ret = sceUsbdInterruptTransfer(slot->handle, endpoint, (unsigned char *)buf,
                                    (int32_t)buf_len, &transferred, (uint32_t)timeout_ms);

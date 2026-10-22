@@ -16,7 +16,9 @@ typedef enum xcp_controller_type {
     XCP_CTRL_NONE = 0,
     XCP_CTRL_XBOX360,
     XCP_CTRL_XBOXONE,
-    XCP_CTRL_SWITCH
+    XCP_CTRL_SWITCH,
+    XCP_CTRL_XBOX_SERIES,
+    XCP_CTRL_DUALSENSE
 } xcp_controller_type;
 
 /* Human readable name of a controller type (never NULL). */
@@ -61,7 +63,7 @@ typedef struct __attribute__((packed)) {
 #define XCP_360_Y           0x80u
 
 /* -------------------------------------------------------------------------
- * Xbox One / Series (and Xbox-mode third-party pads) - "GIP" input report.
+ * Xbox One (and Xbox-mode third-party pads) - "GIP" input report.
  *
  * Wire layout of the 0x20 input report:
  *   [0]  0x20 message type
@@ -116,6 +118,20 @@ typedef struct __attribute__((packed)) {
 
 #define XCP_ONE_TRIGGER_MAX 1023u
 
+/*
+ * Xbox Series X|S speaks the same 0x20 GIP input report. The only difference
+ * we decode is the Share button, which is not in the 18-byte prefix: it sits
+ * XCP_XBOX_SERIES_SHARE_FROM_END bytes before the end of the whole USB
+ * transfer (GIP header included). That is byte 18 of the 44-byte firmware 5.1
+ * report and byte 22 of the 48-byte 5.5 report (the same len-relative rule
+ * Linux's xpad driver uses). It gets its own controller type so the 18-byte
+ * Xbox One path cannot invent a Share press from trailing bytes on
+ * third-party GIP pads.
+ */
+#define XCP_XBOX_SERIES_SHARE_FROM_END 26u
+#define XCP_XBOX_SERIES_SHARE_BIT      0x01u
+#define XCP_XBOX_SERIES_MIN_SIZE       44u /* smallest full USB transfer (fw 5.1) */
+
 /* -------------------------------------------------------------------------
  * Nintendo Switch "input only" third-party pads (PDP family).
  * ---------------------------------------------------------------------- */
@@ -161,6 +177,63 @@ typedef struct __attribute__((packed)) {
 #define XCP_SWITCH_HAT_CENTERED   8u
 
 /* -------------------------------------------------------------------------
+ * Sony DualSense (PS5 pad) / DualSense Edge - USB input report 0x01.
+ *
+ * The wired USB report is 64 bytes. Only the first 11 are needed here; the
+ * layout is the same one Linux hid-playstation.c and SDL_hidapi_ps5.c use:
+ *   [0]  report id, 0x01
+ *   [1]  left  stick X      [2] left  stick Y      (0..255, Y grows down)
+ *   [3]  right stick X      [4] right stick Y
+ *   [5]  L2 trigger         [6] R2 trigger         (0..255)
+ *   [7]  sequence counter
+ *   [8]  buttons0: low nibble = hat, high nibble = face buttons
+ *   [9]  buttons1: shoulders, triggers, create/options, L3/R3
+ *   [10] buttons2: PS, touchpad, mute (Edge extras live here too)
+ * ---------------------------------------------------------------------- */
+#define XCP_DUALSENSE_REPORT_ID   0x01u
+#define XCP_DUALSENSE_REPORT_SIZE 64u
+#define XCP_DUALSENSE_MIN_SIZE    11u
+
+typedef struct __attribute__((packed)) {
+    uint8_t report_id;      /* [0]  0x01 */
+    uint8_t left_stick_x;   /* [1] */
+    uint8_t left_stick_y;   /* [2] */
+    uint8_t right_stick_x;  /* [3] */
+    uint8_t right_stick_y;  /* [4] */
+    uint8_t left_trigger;   /* [5]  0..255 */
+    uint8_t right_trigger;  /* [6]  0..255 */
+    uint8_t counter;        /* [7] */
+    uint8_t buttons0;       /* [8]  hat + face buttons */
+    uint8_t buttons1;       /* [9] */
+    uint8_t buttons2;       /* [10] */
+} xcp_dualsense_report;
+
+/* xcp_dualsense_report.buttons0 */
+#define XCP_DS_SQUARE   0x10u
+#define XCP_DS_CROSS    0x20u
+#define XCP_DS_CIRCLE   0x40u
+#define XCP_DS_TRIANGLE 0x80u
+
+/* xcp_dualsense_report.buttons1 */
+#define XCP_DS_L1        0x01u
+#define XCP_DS_R1        0x02u
+#define XCP_DS_L2        0x04u
+#define XCP_DS_R2        0x08u
+#define XCP_DS_CREATE    0x10u
+#define XCP_DS_OPTIONS   0x20u
+#define XCP_DS_L3        0x40u
+#define XCP_DS_R3        0x80u
+
+/* xcp_dualsense_report.buttons2 */
+#define XCP_DS_PS        0x01u
+#define XCP_DS_TOUCHPAD  0x02u
+#define XCP_DS_MUTE      0x04u
+#define XCP_DS_EDGE_FN_L      0x10u
+#define XCP_DS_EDGE_FN_R      0x20u
+#define XCP_DS_EDGE_PADDLE_L  0x40u
+#define XCP_DS_EDGE_PADDLE_R  0x80u
+
+/* -------------------------------------------------------------------------
  * Known USB identifiers, used to pick a protocol when enumerating.
  * ---------------------------------------------------------------------- */
 #define XCP_VID_MICROSOFT 0x045Eu
@@ -169,8 +242,18 @@ typedef struct __attribute__((packed)) {
 
 #define XCP_VID_PDP       0x0E6Fu
 
+#define XCP_VID_SONY          0x054Cu
+#define XCP_PID_DUALSENSE     0x0CE6u
+#define XCP_PID_DUALSENSE_EDGE 0x0DF2u
+
 /* Is `pid` one of the known Xbox One / Series product ids? */
 int xcp_is_xboxone_pid(uint16_t pid);
+
+/* Is `pid` a Microsoft Xbox Series X|S product id (Share button quirk)? */
+int xcp_is_xbox_series_pid(uint16_t pid);
+
+/* Is `pid` a Sony DualSense or DualSense Edge product id? */
+int xcp_is_dualsense_pid(uint16_t pid);
 
 /*
  * Is `pid` a known PDP Switch "input only" pad product id?

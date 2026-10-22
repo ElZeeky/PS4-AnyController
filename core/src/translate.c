@@ -41,6 +41,14 @@ void xcp_config_default_switch(xcp_config *cfg)
     cfg->invert_right_y = 0;
 }
 
+void xcp_config_default_dualsense(xcp_config *cfg)
+{
+    if (!cfg) return;
+    xcp_config_default(cfg);
+    cfg->invert_left_y  = 0; /* DualSense sticks already match PS4 axes */
+    cfg->invert_right_y = 0;
+}
+
 /* ---------------------------------------------------------------------------
  * Axis helpers
  * ------------------------------------------------------------------------ */
@@ -153,10 +161,14 @@ int xcp_report_looks_valid(xcp_controller_type type, const uint8_t *buf, size_t 
         return len >= XCP_XBOX360_REPORT_SIZE &&
                buf[0] == 0x00 && buf[1] == XCP_XBOX360_REPORT_SIZE;
     case XCP_CTRL_XBOXONE:
+    case XCP_CTRL_XBOX_SERIES:
         return len >= XCP_XBOXONE_REPORT_SIZE &&
                buf[0] == XCP_XBOXONE_REPORT_INPUT;
     case XCP_CTRL_SWITCH:
         return len >= XCP_SWITCH_REPORT_SIZE;
+    case XCP_CTRL_DUALSENSE:
+        return len >= XCP_DUALSENSE_MIN_SIZE &&
+               buf[0] == XCP_DUALSENSE_REPORT_ID;
     default:
         return 0;
     }
@@ -242,7 +254,7 @@ static void decode_xbox360(const xcp_xbox360_report *r, const xcp_config *cfg,
  * ------------------------------------------------------------------------ */
 
 static void decode_xboxone(const xcp_xboxone_report *r, const xcp_config *cfg,
-                           xcp_pad_state *out)
+                           int share, xcp_pad_state *out)
 {
     uint32_t mask = 0;
     uint8_t  lt   = xcp_trigger_from_10bit(r->left_trigger);
@@ -287,9 +299,12 @@ static void decode_xboxone(const xcp_xboxone_report *r, const xcp_config *cfg,
         mask |= XCP_BTN_TOUCHPAD;
     }
 
-    /* Menu: Menu -> Options, View -> Share. */
+    /* Menu: Menu -> Options, View -> Share.
+     * On a Series pad the dedicated Share button also maps to Share; the DS4
+     * has no separate capture button, so both system buttons share one bit. */
     if (r->buttons_low & XCP_ONE_MENU) mask |= XCP_BTN_OPTIONS;
     if (r->buttons_low & XCP_ONE_VIEW) mask |= XCP_BTN_SHARE;
+    if (share)                         mask |= XCP_BTN_SHARE;
 
     /* Analog triggers also set the digital bits. */
     if (lt >= cfg->trigger_threshold) mask |= XCP_BTN_L2;
@@ -360,6 +375,71 @@ static void decode_switch(const xcp_switch_report *r, const xcp_config *cfg,
 }
 
 /* ---------------------------------------------------------------------------
+ * Sony DualSense / DualSense Edge
+ * ------------------------------------------------------------------------ */
+
+static void decode_dualsense(const xcp_dualsense_report *r,
+                             const xcp_config *cfg, xcp_pad_state *out)
+{
+    uint32_t mask = 0;
+    uint8_t  lt   = r->left_trigger;
+    uint8_t  rt   = r->right_trigger;
+
+    out->left_x  = r->left_stick_x;
+    out->left_y  = r->left_stick_y;
+    out->right_x = r->right_stick_x;
+    out->right_y = r->right_stick_y;
+
+    apply_stick(cfg, &out->left_x,  &out->left_y,  cfg->invert_left_y);
+    apply_stick(cfg, &out->right_x, &out->right_y, cfg->invert_right_y);
+
+    /*
+     * The report carries both an analog trigger value and a digital L2/R2 bit.
+     * Some DualSense firmware sets the bit before the analog value leaves zero,
+     * so mirror Linux's hid-playstation: force full travel when the bit is set
+     * and the analog value is still zero, otherwise games that only read the
+     * analog value would miss the press.
+     */
+    if ((r->buttons1 & XCP_DS_L2) && lt == 0) lt = 255;
+    if ((r->buttons1 & XCP_DS_R2) && rt == 0) rt = 255;
+
+    out->left_trigger  = lt;
+    out->right_trigger = rt;
+
+    /* Face buttons are already in PlayStation positions. */
+    if (r->buttons0 & XCP_DS_SQUARE)   mask |= XCP_BTN_SQUARE;
+    if (r->buttons0 & XCP_DS_CROSS)    mask |= XCP_BTN_CROSS;
+    if (r->buttons0 & XCP_DS_CIRCLE)   mask |= XCP_BTN_CIRCLE;
+    if (r->buttons0 & XCP_DS_TRIANGLE) mask |= XCP_BTN_TRIANGLE;
+
+    if (r->buttons1 & XCP_DS_L1) mask |= XCP_BTN_L1;
+    if (r->buttons1 & XCP_DS_R1) mask |= XCP_BTN_R1;
+    if (r->buttons1 & XCP_DS_L2) mask |= XCP_BTN_L2;
+    if (r->buttons1 & XCP_DS_R2) mask |= XCP_BTN_R2;
+    if (lt >= cfg->trigger_threshold) mask |= XCP_BTN_L2;
+    if (rt >= cfg->trigger_threshold) mask |= XCP_BTN_R2;
+    if (r->buttons1 & XCP_DS_L3) mask |= XCP_BTN_L3;
+    if (r->buttons1 & XCP_DS_R3) mask |= XCP_BTN_R3;
+
+    if (r->buttons1 & XCP_DS_CREATE)  mask |= XCP_BTN_SHARE;
+    if (r->buttons1 & XCP_DS_OPTIONS) mask |= XCP_BTN_OPTIONS;
+
+    if (r->buttons2 & XCP_DS_PS)       mask |= XCP_BTN_PS;
+    if (r->buttons2 & XCP_DS_TOUCHPAD) mask |= XCP_BTN_TOUCHPAD;
+
+    /*
+     * Mute, and the Edge's Fn/paddle bits, have no DS4 equivalent. The Edge
+     * paddles can be remapped to normal buttons in the controller's own
+     * profile, so leaving them unmapped loses nothing.
+     */
+
+    mask |= xcp_switch_hat_mask(r->buttons0 & 0x0Fu);
+
+    out->buttons   = mask;
+    out->connected = 1;
+}
+
+/* ---------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------ */
 
@@ -374,8 +454,11 @@ int xcp_decode(xcp_controller_type type,
     if (!xcp_report_looks_valid(type, buf, len)) return 0;
 
     if (!cfg) {
-        if (type == XCP_CTRL_SWITCH) xcp_config_default_switch(&local);
-        else                         xcp_config_default(&local);
+        switch (type) {
+        case XCP_CTRL_SWITCH:    xcp_config_default_switch(&local);    break;
+        case XCP_CTRL_DUALSENSE: xcp_config_default_dualsense(&local); break;
+        default:                 xcp_config_default(&local);           break;
+        }
         cfg = &local;
     }
 
@@ -391,13 +474,30 @@ int xcp_decode(xcp_controller_type type,
     case XCP_CTRL_XBOXONE: {
         xcp_xboxone_report r;
         memcpy(&r, buf, sizeof(r));
-        decode_xboxone(&r, cfg, out);
+        decode_xboxone(&r, cfg, 0, out);
+        return 1;
+    }
+    case XCP_CTRL_XBOX_SERIES: {
+        xcp_xboxone_report r;
+        int share = 0;
+        memcpy(&r, buf, sizeof(r));
+        if (len >= XCP_XBOX_SERIES_MIN_SIZE) {
+            share = (buf[len - XCP_XBOX_SERIES_SHARE_FROM_END] &
+                     XCP_XBOX_SERIES_SHARE_BIT) != 0;
+        }
+        decode_xboxone(&r, cfg, share, out);
         return 1;
     }
     case XCP_CTRL_SWITCH: {
         xcp_switch_report r;
         memcpy(&r, buf, sizeof(r));
         decode_switch(&r, cfg, out);
+        return 1;
+    }
+    case XCP_CTRL_DUALSENSE: {
+        xcp_dualsense_report r;
+        memcpy(&r, buf, sizeof(r));
+        decode_dualsense(&r, cfg, out);
         return 1;
     }
     default:

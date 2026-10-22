@@ -54,6 +54,11 @@ reached in stages, each one proved by a run the user sent back:
 Confirmed by runs `docs/logs/xcp_payload4.log` .. `xcp_payload7.log` (see 5e). The plugin
 remains a per-game fallback and its first console run (PS4-2) is still pending.
 
+**PC-4 (native Linux inspector) is implemented and cross-compiled but not hardware-tested
+yet.** The Linux binary uses `/dev/hidraw` + sysfs, captures and analyzes automatically,
+and ships with `setup-linux.sh` / `run-linux.sh`. The Windows inspector now auto-analyzes
+the capture too, and `--play` understands the payload's `opened VID:PID` line.
+
 **There is no in-console way to stop the payload once it is running**; see the new
 section 10, which is the honest answer to the user's question.
 
@@ -61,16 +66,17 @@ section 10, which is the honest answer to the user's question.
 |---|---|
 | PC-1 three-layer refactor | done, tests green |
 | PC-2 core unit tests | done — synthetic vectors throughout |
-| PC-2 PC CLI | done — `--list`, `--selftest`, `--mock`, `--play`, `--live` |
+| PC-2 PC CLI | done — `--list`, `--selftest`, `--mock`, `--play`, `--live`; no-args capture now analyzes too |
 | PC-3 mock scePad/user-service + edge cases | done — 24 router tests |
+| PC-4 native Linux inspector | **implemented, cross-compiled; hardware test pending** — `/dev/hidraw`, `setup-linux.sh`, `run-linux.sh` |
 | PS4-1 build the `.prx` | **done** — `build/ps4/xcp_controller.prx`, exports and imports verified |
 | PS4-1 deployment guide | done — [`docs/DEPLOY-PS4.md`](docs/DEPLOY-PS4.md) |
 | PS4-2 iterate from the user's klog | **blocked on the user running it once** (payload already works, so optional) |
-| PS4-3 payload: virtual DS4, system-wide | **DONE AND WORKING on fw 11.00** — `./build.sh payload`, current artifact 273,440 bytes |
+| PS4-3 payload: virtual DS4, system-wide | **DONE AND WORKING on fw 11.00** — `./build.sh payload`, current artifact 275,640 bytes |
 | PS4-3 libScePad VDA patch | **done and confirmed** — 4.10 |
 | PS4-3 deployment guide | done — [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md) |
 | PS4-3 touchpad-click chord (L3+R3) | **done and confirmed** — 4.12 |
-| Automated tests | `./build.sh test` → **66 tests / 319 checks / 0 failed** |
+| Automated tests | `./build.sh test` → **72 tests / 379 checks / 0 failed** |
 
 ---
 
@@ -365,10 +371,12 @@ virtual pad was deleted and recreated many times a second (device ids climbing
 
 ## 5. Verified on PC (tests and tools actually run)
 
-* `./build.sh test` → **66 tests, 319 checks, 0 failures**, warning-clean under
+* `./build.sh test` → **72 tests, 379 checks, 0 failures**, warning-clean under
   `-Wall -Wextra -Wshadow -Wconversion`. (The counts below record earlier points in the
   project; the suite has grown since - the touchpad-chord test is the latest addition.)
-* `./build.sh cli` → warning-clean; `build/xcp_inspector` runs.
+* `./build.sh cli` → warning-clean; `build/AnyController-Inspector` runs.
+* `./build.sh cli-linux` → static `x86_64-linux-musl` ELF; compiled cleanly, no Linux
+  host available here to run it yet.
 * `--selftest` → 12/12 checks OK, including "unplugging the Xbox pad hands player 1 back
   to the DS4".
 * `--play samples/xbox360-reports.txt` → 29/29 reports decode correctly, exit 0.
@@ -644,3 +652,35 @@ implemented, per the user's request to not change code):
 
 All of them must call `xcp_vda_remove(&dev)` (i.e. `DeleteDevice`) before returning, so the
 system does not keep an orphaned virtual pad.
+
+---
+
+## 11. PC-4: Linux inspector and release packaging (this session)
+
+The inspector is now one portable C tool with two capture backends:
+
+* **Windows**: SetupAPI + overlapped `ReadFile` (unchanged).
+* **Linux**: `/dev/hidraw` + `poll()`, sysfs enumeration, report-descriptor gamepad
+  detection, name fallback, `setup-linux.sh` udev rule, `run-linux.sh` launcher. No
+  hidapi/libusb; the shipped binary is static `x86_64-linux-musl`.
+
+Both backends write `AnyController-capture-VID-PID.txt` next to the executable. No-args
+now captures **and analyzes**; `--capture` is capture-only; `--play` accepts captures,
+payload logs, and the payload's `opened VID:PID` line. `--list` enumerates HID/USB on
+both platforms. `--live` remains Windows/XInput-only.
+
+Build/package:
+
+    ./build.sh test          # 72 tests / 379 checks
+    ./build.sh cli           # native inspector
+    ./build.sh cli-linux     # static Linux inspector
+    ./build.sh package       # release/: payload, dumper, both inspectors, docs/scripts
+
+`release/` now contains `AnyController-Inspector.exe`,
+`AnyController-Inspector-linux-x86_64`, `INSPECTOR.txt`, `INSPECTOR-LINUX.txt`,
+`setup-linux.sh` and `run-linux.sh` (scripts LF-only). The Linux binary was cross-compiled
+and inspected with `file` but **not run** here; a volunteer is needed for hardware testing.
+
+Privacy/legal: do not publish firmware logs or `.bin` dumps. Controller captures may
+contain a `# path:` line; delete it before sharing. `.bin` dumps contain Sony code and are
+only for firmware porting, never for controller compatibility.

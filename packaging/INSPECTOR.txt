@@ -1,0 +1,53 @@
+AnyController-Inspector.exe - PC-side helper
+============================================
+
+Windows tool for capturing and inspecting a controller from the PC. You do not
+need it to play.
+
+Linux users: use AnyController-Inspector-linux-x86_64 and read
+INSPECTOR-LINUX.txt instead. The capture format is identical.
+
+Capture a controller (this is what to send when reporting a new pad)
+--------------------------------------------------------------------
+Double-click AnyController-Inspector.exe, or run it with no arguments. It scans
+for a controller, captures for 30 seconds, writes
+AnyController-capture-XXXX-YYYY.txt next to the .exe, then decodes it
+automatically and prints the buttons and stick ranges it saw.
+
+While it runs, press every button and move both sticks to the edges. Only
+changes are written. If several devices are found, pick yours by number.
+
+    AnyController-Inspector.exe --capture 45
+
+--capture N  capture only, with an explicit duration in seconds.
+
+Other modes
+-----------
+    AnyController-Inspector.exe --list
+    AnyController-Inspector.exe --live 15
+    AnyController-Inspector.exe --play capture.txt
+
+--list       shows attached HID/USB devices as VID:PID and says whether the
+             payload can drive each one.
+--live N     reads a pad in XInput mode and compares it with our decoder.
+--play FILE  decodes a hex report dump (the capture file, the "xcpcapture"
+             lines the payload writes to its log, or a whole payload log).
+
+What to send back
+-----------------
+1. The AnyController-capture-XXXX-YYYY.txt file.
+2. The controller model and, if known, the USB VID:PID.
+3. Whether it is original or a clone, and whether it is wired or wireless.
+4. What worked and what did not on the console.
+
+The capture contains only controller state. It also has a "# path:" line with
+the local Windows device path; delete that line if you prefer.
+
+Send firmware logs and .bin dumps privately, never in a public issue.
+The .bin files contain Sony code; see DUMPER.txt.
+
+Notes
+-----
+The capture file uses the same hex format as --play, so it can be decoded
+directly. If the controller is in XInput mode it may not appear as HID; switch
+it to the mode you use on the PS4, or use --live for XInput.

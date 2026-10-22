@@ -180,8 +180,10 @@ The `xcpcapture` lines are the pad's own bytes; paste them into a file and run t
 through the same decoder the console ran:
 
 ```bash
-./build/xcp_inspector --play capture.txt
+./build/AnyController-Inspector --play capture.txt
 ```
+
+On Linux, use `./build/AnyController-Inspector-linux-x86_64 --play capture.txt`.
 
 A clean capture exits `0`; a rejected line makes it exit `2`.
 

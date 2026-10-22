@@ -7,6 +7,10 @@ It reads a few bytes of libScePad and libSceMbus so the virtual-pad patch can be
 ported to a different firmware. It never creates a device and never touches your
 controllers.
 
+You do NOT need this for a new controller. Controller compatibility comes from
+the USB report captures (INSPECTOR.txt); the .bin dumps are only for porting the
+firmware patch.
+
 
 How to run
 ----------

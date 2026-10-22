@@ -73,6 +73,58 @@ static size_t make_switch(uint8_t *buf, uint8_t b0, uint8_t b1, uint8_t hat,
     return XCP_SWITCH_REPORT_SIZE;
 }
 
+static size_t make_dualsense(uint8_t *buf,
+                             uint8_t b0, uint8_t b1, uint8_t b2,
+                             uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry,
+                             uint8_t lt, uint8_t rt)
+{
+    memset(buf, 0, XCP_DUALSENSE_REPORT_SIZE);
+    buf[0]  = XCP_DUALSENSE_REPORT_ID;
+    buf[1]  = lx;
+    buf[2]  = ly;
+    buf[3]  = rx;
+    buf[4]  = ry;
+    buf[5]  = lt;
+    buf[6]  = rt;
+    buf[8]  = b0;
+    buf[9]  = b1;
+    buf[10] = b2;
+    return XCP_DUALSENSE_REPORT_SIZE;
+}
+
+/*
+ * Series reports carry the Share bit near the end of the whole USB transfer,
+ * not in the 18-byte input prefix. `total_len` is 44 (payload 40, firmware
+ * 5.1) or 48 (payload 44, firmware 5.5); both include the 4-byte GIP header.
+ */
+static size_t make_series(uint8_t *buf, size_t total_len,
+                          uint8_t low, uint8_t high,
+                          uint16_t lt, uint16_t rt,
+                          int16_t lx, int16_t ly, int16_t rx, int16_t ry,
+                          int share)
+{
+    memset(buf, 0, total_len);
+    buf[0] = 0x20;
+    buf[3] = 0x0E;
+    buf[4] = low;
+    buf[5] = high;
+    buf[6]  = (uint8_t)(lt & 0xFF);
+    buf[7]  = (uint8_t)((lt >> 8) & 0xFF);
+    buf[8]  = (uint8_t)(rt & 0xFF);
+    buf[9]  = (uint8_t)((rt >> 8) & 0xFF);
+    buf[10] = (uint8_t)(lx & 0xFF);
+    buf[11] = (uint8_t)((lx >> 8) & 0xFF);
+    buf[12] = (uint8_t)(ly & 0xFF);
+    buf[13] = (uint8_t)((ly >> 8) & 0xFF);
+    buf[14] = (uint8_t)(rx & 0xFF);
+    buf[15] = (uint8_t)((rx >> 8) & 0xFF);
+    buf[16] = (uint8_t)(ry & 0xFF);
+    buf[17] = (uint8_t)((ry >> 8) & 0xFF);
+    if (share) buf[total_len - XCP_XBOX_SERIES_SHARE_FROM_END] |=
+        XCP_XBOX_SERIES_SHARE_BIT;
+    return total_len;
+}
+
 /* ---------------------------------------------------------------------------
  * Axis primitives
  * ------------------------------------------------------------------------ */
@@ -406,6 +458,172 @@ XCP_TEST(xboxone_view_stickclicks_and_dpad_bits)
 }
 
 /* ---------------------------------------------------------------------------
+ * Xbox Series X|S
+ * ------------------------------------------------------------------------ */
+
+XCP_TEST(xbox_series_share_is_at_the_end_of_the_packet)
+{
+    uint8_t       buf[48];
+    xcp_pad_state s;
+    size_t        len;
+
+    /* 44-byte transfer (40-byte payload, fw 5.1): Share is byte 18 (44 - 26). */
+    len = make_series(buf, 44, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, 0);
+
+    len = make_series(buf, 44, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_SHARE);
+
+    /* 48-byte transfer (44-byte payload, fw 5.5): Share moved to byte 22. */
+    len = make_series(buf, 48, 0, 0, 0, 0, 0, 0, 0, 0, 1);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_SHARE);
+
+    /* A stray bit at byte 18 must not count when the transfer is 48 bytes. */
+    len = make_series(buf, 48, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    buf[18] = XCP_XBOX_SERIES_SHARE_BIT;
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, 0);
+
+    /* Short report: no Share byte to read; still decodes the buttons. */
+    len = make_series(buf, 18, XCP_ONE_A, 0, 0, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CROSS);
+
+    /* A truncated packet must not read Share out of the header/sequence. */
+    len = make_series(buf, 27, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    buf[1] = XCP_XBOX_SERIES_SHARE_BIT;
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, 0);
+}
+
+XCP_TEST(xbox_series_standard_buttons_decode_like_xbox_one)
+{
+    uint8_t       buf[44];
+    xcp_pad_state s;
+    size_t        len = make_series(buf, 44,
+                                    XCP_ONE_MENU | XCP_ONE_VIEW | XCP_ONE_A,
+                                    XCP_ONE_LB | XCP_ONE_R3 | XCP_ONE_DPAD_UP,
+                                    1023, 0, 0, -32768, 0, 0, 0);
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX_SERIES, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons,
+                     XCP_BTN_OPTIONS | XCP_BTN_SHARE | XCP_BTN_CROSS |
+                     XCP_BTN_L1 | XCP_BTN_R3 | XCP_BTN_UP | XCP_BTN_L2);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.left_y, 255);
+}
+
+/* ---------------------------------------------------------------------------
+ * DualSense / DualSense Edge
+ * ------------------------------------------------------------------------ */
+
+XCP_TEST(dualsense_centred_report)
+{
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+    size_t        len = make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                                       128, 128, 128, 128, 0, 0);
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, 0);
+    XCP_CHECK_EQ_INT(s.left_x, 128);
+    XCP_CHECK_EQ_INT(s.left_y, 128);
+    XCP_CHECK_EQ_INT(s.right_x, 128);
+    XCP_CHECK_EQ_INT(s.right_y, 128);
+    XCP_CHECK_EQ_INT(s.left_trigger, 0);
+    XCP_CHECK_EQ_INT(s.right_trigger, 0);
+    XCP_CHECK_EQ_INT(s.connected, 1);
+
+    /* Validation only needs the 11-byte prefix, not the full USB report. */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_MIN_SIZE, NULL, &s), 1);
+}
+
+XCP_TEST(dualsense_face_buttons_shoulders_and_menu)
+{
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+
+    make_dualsense(buf,
+                   XCP_SWITCH_HAT_CENTERED | XCP_DS_SQUARE | XCP_DS_CROSS |
+                       XCP_DS_CIRCLE | XCP_DS_TRIANGLE,
+                   XCP_DS_L1 | XCP_DS_R1 | XCP_DS_CREATE | XCP_DS_OPTIONS |
+                       XCP_DS_L3 | XCP_DS_R3,
+                   XCP_DS_PS | XCP_DS_TOUCHPAD,
+                   128, 128, 128, 128, 0, 0);
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons,
+                     XCP_BTN_SQUARE | XCP_BTN_CROSS | XCP_BTN_CIRCLE |
+                     XCP_BTN_TRIANGLE | XCP_BTN_L1 | XCP_BTN_R1 |
+                     XCP_BTN_SHARE | XCP_BTN_OPTIONS | XCP_BTN_L3 |
+                     XCP_BTN_R3 | XCP_BTN_PS | XCP_BTN_TOUCHPAD);
+}
+
+XCP_TEST(dualsense_triggers_hat_and_sticks)
+{
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+
+    /* D-pad up-right; sticks full low/low and high/high (no Y inversion). */
+    make_dualsense(buf, XCP_SWITCH_HAT_UP_RIGHT, 0, 0,
+                   0, 0, 255, 255, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_UP | XCP_BTN_RIGHT);
+    XCP_CHECK_EQ_INT(s.left_x, 0);
+    XCP_CHECK_EQ_INT(s.left_y, 0);
+    XCP_CHECK_EQ_INT(s.right_x, 255);
+    XCP_CHECK_EQ_INT(s.right_y, 255);
+
+    /* One step below threshold: analog value only. */
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                   128, 128, 128, 128, 29, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_trigger, 29);
+    XCP_CHECK_EQ_HEX(s.buttons & XCP_BTN_L2, 0);
+
+    /* Exactly at threshold: digital bit appears. */
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                   128, 128, 128, 128, 30, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons & XCP_BTN_L2, XCP_BTN_L2);
+
+    /* Digital bit with a zero analog value: force full travel (Linux quirk). */
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, XCP_DS_L2 | XCP_DS_R2, 0,
+                   128, 128, 128, 128, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.right_trigger, 255);
+    XCP_CHECK_EQ_HEX(s.buttons & (XCP_BTN_L2 | XCP_BTN_R2),
+                     XCP_BTN_L2 | XCP_BTN_R2);
+}
+
+XCP_TEST(dualsense_report_skips_rubbish)
+{
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                   128, 128, 128, 128, 0, 0);
+
+    buf[0] = 0x02; /* not the DualSense input report */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 0);
+
+    buf[0] = XCP_DUALSENSE_REPORT_ID;
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf, 10, NULL, &s), 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf, 11, NULL, &s), 1);
+}
+
+/* ---------------------------------------------------------------------------
  * Switch input-only
  * ------------------------------------------------------------------------ */
 
@@ -456,6 +674,14 @@ XCP_TEST(report_looks_valid)
     b[0] = 0x20;
     XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_XBOXONE, b, 18));
     XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_XBOXONE, b, 17));
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_XBOX_SERIES, b, 18));
+    XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_XBOX_SERIES, b, 17));
+
+    b[0] = XCP_DUALSENSE_REPORT_ID;
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_DUALSENSE, b,
+                                     XCP_DUALSENSE_MIN_SIZE));
+    XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_DUALSENSE, b,
+                                           XCP_DUALSENSE_MIN_SIZE - 1));
 
     XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH, b, 7));
     XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_NONE, b, 7));
@@ -466,12 +692,28 @@ XCP_TEST(controller_type_for_ids)
 {
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x028E), XCP_CTRL_XBOX360);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x02EA), XCP_CTRL_XBOXONE);
-    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x0B12), XCP_CTRL_XBOXONE);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x0B12),
+                     XCP_CTRL_XBOX_SERIES);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x0B13),
+                     XCP_CTRL_XBOX_SERIES);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x0B20),
+                     XCP_CTRL_XBOX_SERIES);
     /* Unknown Microsoft pid is assumed to be a GIP pad. */
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x1234), XCP_CTRL_XBOXONE);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x054C, 0x0CE6),
+                     XCP_CTRL_DUALSENSE);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x054C, 0x0DF2),
+                     XCP_CTRL_DUALSENSE);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x0E6F, 0x0187), XCP_CTRL_SWITCH);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x0E6F, 0x9999), XCP_CTRL_NONE);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x054C, 0x09CC), XCP_CTRL_NONE);
+
+    XCP_CHECK(xcp_is_xbox_series_pid(0x0B12));
+    XCP_CHECK_FALSE(xcp_is_xbox_series_pid(0x02EA));
+    XCP_CHECK(xcp_is_xboxone_pid(0x0B12));
+    XCP_CHECK(xcp_is_dualsense_pid(0x0CE6));
+    XCP_CHECK(xcp_is_dualsense_pid(0x0DF2));
+    XCP_CHECK_FALSE(xcp_is_dualsense_pid(0x09CC));
 }
 
 void xcp_register_translate_tests(void)
@@ -497,6 +739,14 @@ void xcp_register_translate_tests(void)
     XCP_RUN(xboxone_report_skips_rubbish);
     XCP_RUN(xboxone_full_button_and_axis_decode);
     XCP_RUN(xboxone_view_stickclicks_and_dpad_bits);
+
+    XCP_RUN(xbox_series_share_is_at_the_end_of_the_packet);
+    XCP_RUN(xbox_series_standard_buttons_decode_like_xbox_one);
+
+    XCP_RUN(dualsense_centred_report);
+    XCP_RUN(dualsense_face_buttons_shoulders_and_menu);
+    XCP_RUN(dualsense_triggers_hat_and_sticks);
+    XCP_RUN(dualsense_report_skips_rubbish);
 
     XCP_RUN(switch_positional_face_buttons_and_hat);
     XCP_RUN(switch_zl_zr_are_digital);

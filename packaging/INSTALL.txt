@@ -1,9 +1,11 @@
 INSTALL
 ==================================
 
-This makes any wired third-party controller work as PLAYER 1 on a jailbroken
-PS4 running GoldHEN, in every screen: home, settings, sign-in and games. It does
-that by creating a virtual DualShock 4, so it is a GoldHEN *payload*.
+This makes any wired controller work as PLAYER 1 on a jailbroken PS4 running
+GoldHEN, in every screen: home, settings, sign-in and games. The decoder knows
+the Xbox 360, Xbox One/Series, DualSense/DualSense Edge and Switch PDP report
+layouts, including clones that use them. It does that by creating a virtual
+DualShock 4, so it is a GoldHEN *payload*.
 
 Files here:
 
@@ -56,9 +58,11 @@ AutoRun queue. Or edit /data/GoldHEN/payloads.ini by hand and add this line
 Touchpad click
 --------------
 
-Your controller has no touchpad. The virtual DS4's touchpad CLICK is fired by an
-L3+R3 chord: program a back button (e.g. M3) on the controller to an "L3+R3"
-macro, and one press does it. A held L3+R3 also works.
+A DualSense's own touchpad click passes straight through. On a controller with
+no touchpad, the virtual DS4's touchpad CLICK is fired by an L3+R3 chord:
+program a back button (e.g. M3) on the controller to an "L3+R3" macro, and one
+press does it. A held L3+R3 also works. On an Xbox Series pad the Share button
+maps to the DS4 Share button.
 
 
 How to stop it
