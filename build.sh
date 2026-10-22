@@ -105,7 +105,7 @@ cmd_cli() {
   fi
   mapfile -t src < <(portable_src)
   "${CC_CMD[@]}" "${STD[@]}" "${WARN[@]}" "${INCLUDES[@]}" "${extra[@]}" \
-    -o "$BUILD/xcp_inspector" \
+    -o "$BUILD/AnyController-Inspector" \
     "${src[@]}" "${hid_src[@]}" "${cli_src[@]}"
 }
 
@@ -127,27 +127,40 @@ cmd_clean() {
 cmd_package() {
   local elf="$BUILD/ps4/AnyController.elf"
   local dumper="$BUILD/ps4/AnyController-dumper.elf"
+  local cli="$BUILD/AnyController-Inspector"
+  [ -f "$cli" ] || cli="$BUILD/AnyController-Inspector.exe"
   [ -f "$elf" ] || die "no payload yet - run ./build.sh payload first"
   [ -f "$ROOT/packaging/INSTALL.txt" ] || die "packaging/INSTALL.txt missing"
   [ -f "$ROOT/packaging/DUMPER.txt" ] || die "packaging/DUMPER.txt missing"
+  [ -f "$ROOT/packaging/PC-TOOL.txt" ] || die "packaging/PC-TOOL.txt missing"
 
   if [ ! -f "$dumper" ]; then
     say "dumper not built yet; building it"
     "$ROOT/ps4/build_payload.sh" dump
   fi
+  if [ ! -f "$cli" ]; then
+    say "PC inspector not built yet; building it"
+    cmd_cli
+    cli="$BUILD/AnyController-Inspector"
+    [ -f "$cli" ] || cli="$BUILD/AnyController-Inspector.exe"
+  fi
+  [ -f "$cli" ] || die "PC inspector binary not found after build"
 
   say "assembling release/"
   rm -rf "$ROOT/release"
   mkdir -p "$ROOT/release"
   cp "$elf"    "$ROOT/release/AnyController.elf"
   cp "$dumper" "$ROOT/release/AnyController-dumper.elf"
+  cp "$cli"    "$ROOT/release/AnyController-Inspector.exe"
   cp "$ROOT/packaging/INSTALL.txt" "$ROOT/release/INSTALL.txt"
   cp "$ROOT/packaging/DUMPER.txt"  "$ROOT/release/DUMPER.txt"
+  cp "$ROOT/packaging/PC-TOOL.txt" "$ROOT/release/PC-TOOL.txt"
 
   printf '\n'
   ls -l "$ROOT/release"
   printf '\n  release/ is ready. Drag its contents to the console over FTP;\n'
-  printf '  read release/INSTALL.txt for the steps (DUMPER.txt is for contributors).\n'
+  printf '  read release/INSTALL.txt for the steps (DUMPER.txt and PC-TOOL.txt\n'
+  printf '  are for contributors).\n'
 }
 
 case "${1:-test}" in

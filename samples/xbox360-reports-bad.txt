@@ -1,4 +1,4 @@
-# Reports that MUST be rejected, for: xcp_inspector --play samples/xbox360-reports-bad.txt
+# Reports that MUST be rejected, for: AnyController-Inspector --play samples/xbox360-reports-bad.txt
 # Exit code 2 with "2 rejected" is the expected, correct result here.
 
 # wrong message type (0x01, not 0x00)

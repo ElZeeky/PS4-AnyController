@@ -1,5 +1,5 @@
 /*
- * host/xcp_inspector.c - the PC-side tool.
+ * host/pc_tool.c - the PC-side tool.
  *
  * Modes:
  *   --list              what is plugged in, and how it identifies itself
@@ -766,7 +766,7 @@ static int cmd_live(int seconds)
 
 static void usage(void)
 {
-    printf("xcp_inspector - PC side of the Xbox->PS4 player-1 plugin\n\n");
+    printf("AnyController-Inspector - PC side of the PS4 player-1 payload\n\n");
     printf("usage:\n");
     printf("  --list                 show attached HID/USB devices and what we make of them\n");
     printf("  --selftest             run synthetic reports through core + router\n");

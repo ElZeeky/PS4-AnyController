@@ -1,4 +1,4 @@
-# Sample raw-report dump for: xcp_inspector --play samples/xbox360-reports.txt
+# Sample raw-report dump for: AnyController-Inspector --play samples/xbox360-reports.txt
 #
 # Format: optional label, then hex bytes, one report per line. '#' starts a comment.
 # These are Xbox 360 wire-format input reports (20 bytes):

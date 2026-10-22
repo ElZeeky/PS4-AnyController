@@ -27,7 +27,6 @@
 *.prx
 
 # PC artifacts
-/pc/xcp_inspector.exe
 *.exe
 
 # Sony library dumps (copyrighted - never publish these)

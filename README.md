@@ -112,7 +112,7 @@ so download them yourself:
 
 ## PC inspector
 
-`host/xcp_inspector` decodes and tests everything without a console. No hidapi, no libusb,
+`AnyController-Inspector` decodes and tests everything without a console. No hidapi, no libusb,
 no Zadig, no driver swap — it uses the Windows APIs directly.
 
 ```bash
@@ -138,7 +138,7 @@ real report and runs it through the same decoder the console runs. See
 | `usb/` | open/read/close: `usb_sceusbd` (PS4), `usb_mock` (tests), `usb_common` |
 | `router/` | the player-1 decision (`router.c`), every platform call injected |
 | `mocks/` | a fake scePad/sceUserService, plus report-packing helpers |
-| `host/` | `xcp_inspector`, the PC-side tool |
+| `host/` | the PC-side tool (`pc_tool.c`, shipped as `AnyController-Inspector`) |
 | `ps4/` | the payload (`payload/`), Orbis glue (`src/`), `build_payload.sh`, the libScePad patch, plus the `hello/` and `dumper/` diagnostic payloads |
 | `packaging/` | `INSTALL.txt` used to assemble `release/` |
 | `tests/` | 66 tests, 319 checks, no test-framework dependency |

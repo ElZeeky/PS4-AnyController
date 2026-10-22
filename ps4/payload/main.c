@@ -73,9 +73,9 @@
 #define XCP_PAD_RETRY_INTERVAL_US 3000000
 
 /*
- * Dump the first few raw reports in the exact format `xcp_inspector --play`
- * reads, so the pad's own bytes can be checked against the same decoder the
- * console runs. 0 disables it.
+ * Dump the first few raw reports in the exact format
+ * `AnyController-Inspector --play` reads, so the pad's own bytes can be checked
+ * against the same decoder the console runs. 0 disables it.
  */
 #define XCP_CAPTURE_REPORTS 400
 
@@ -127,7 +127,8 @@ static void xcp_capture_report(const uint8_t *buf, size_t len)
     g_captured++;
     if (g_captured == XCP_CAPTURE_REPORTS) {
         printf(XCP_TAG "capture complete. Paste every line containing xcpcapture "
-                       "into a file and run: xcp_inspector --play capture.txt\n");
+                       "into a file and run: "
+                       "AnyController-Inspector --play capture.txt\n");
     }
 }
 #else
