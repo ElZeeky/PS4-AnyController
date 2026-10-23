@@ -547,6 +547,16 @@ static int xcp_hid_capture(const xcp_hid_cand *c, int seconds,
     }
 
     fclose(f);
+
+    if (seq == 0) {
+        remove(out_path);
+        printf("\nNo input reports arrived from %s.\n", c->path);
+        printf("The HID interface was readable, but the device did not stream.\n");
+        printf("Xbox pads in XInput/GIP mode are usually owned by their kernel\n");
+        printf("driver; capture from /data/AnyController.log on the console.\n");
+        goto done;
+    }
+
     ret = 0;
 
 done:
@@ -1013,6 +1023,7 @@ static int xcp_hid_capture(const xcp_hid_cand *c, int seconds,
     unsigned       seq = 0;
     time_t         start;
     char           dir[PATH_MAX];
+    long           len_pos;
 
     if (!out_path || out_path_size == 0) {
         return 1;
@@ -1053,7 +1064,8 @@ static int xcp_hid_capture(const xcp_hid_cand *c, int seconds,
     fprintf(f, "# pid: 0x%04X\n", (unsigned)c->pid);
     fprintf(f, "# usage_page: 0x%02X\n", (unsigned)c->usage_page);
     fprintf(f, "# usage: 0x%02X\n", (unsigned)c->usage);
-    fprintf(f, "# input_report_length: 0\n");
+    len_pos = ftell(f);
+    fprintf(f, "# input_report_length: %5u\n", 0u);
     fprintf(f, "# path: %s\n", c->path);
     fprintf(f, "# os: linux\n");
     fprintf(f, "#\n");
@@ -1112,9 +1124,18 @@ static int xcp_hid_capture(const xcp_hid_cand *c, int seconds,
 
         seq++;
         xcp_linux_write_line(f, seq, buf, (size_t)got);
-        fflush(f);
         last_len = (size_t)got;
         memcpy(last, buf, last_len);
+        if (seq == 1) {
+            long end = ftell(f);
+            if (len_pos >= 0 && end >= 0 &&
+                fseek(f, len_pos, SEEK_SET) == 0) {
+                fprintf(f, "# input_report_length: %5u\n",
+                        (unsigned)last_len);
+                (void)fseek(f, end, SEEK_SET);
+            }
+        }
+        fflush(f);
 
         if (seq >= 2000) {
             printf("\nReached the capture limit.\n");
@@ -1124,6 +1145,18 @@ static int xcp_hid_capture(const xcp_hid_cand *c, int seconds,
 
     fclose(f);
     close(fd);
+
+    if (seq == 0) {
+        remove(out_path);
+        printf("\nNo input reports arrived from %s.\n", c->path);
+        printf("The descriptor was readable, but the device did not stream.\n");
+        printf("Some pads expose only a vendor/control interface on hidraw;\n");
+        printf("others (Xbox XInput/GIP) are owned by their kernel driver.\n");
+        printf("For those, capture from /data/AnyController.log on the console\n");
+        printf("and decode that payload log with --play instead.\n");
+        fflush(stdout);
+        return 1;
+    }
 
     printf("\nSaved: %s\n", out_path);
     printf("Send this file together with the controller model.\n");

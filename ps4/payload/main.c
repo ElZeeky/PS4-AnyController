@@ -67,7 +67,11 @@
 #define XCP_RESCAN_INTERVAL_US 1000000
 
 /* How long to wait for the kernel log to name the device we just created. */
-#define XCP_KLOG_WAIT_MS 700
+#define XCP_KLOG_WAIT_MS 5000
+
+#define XCP_PAYLOAD_VERSION "1.2.0-dev"
+
+extern uint32_t kernel_get_fw_version(void);
 
 /* How long to wait before retrying virtual-pad creation after a failure. */
 #define XCP_PAD_RETRY_INTERVAL_US 3000000
@@ -97,6 +101,13 @@ static int     g_captured;
 static uint8_t g_prev[XCP_USB_MAX_REPORT];
 static size_t  g_prev_len;
 static int     g_have_prev;
+
+static void xcp_capture_reset(void)
+{
+    g_captured  = 0;
+    g_prev_len  = 0;
+    g_have_prev = 0;
+}
 
 static void xcp_capture_report(const uint8_t *buf, size_t len)
 {
@@ -132,6 +143,10 @@ static void xcp_capture_report(const uint8_t *buf, size_t len)
     }
 }
 #else
+static void xcp_capture_reset(void)
+{
+}
+
 static void xcp_capture_report(const uint8_t *buf, size_t len)
 {
     (void)buf;
@@ -172,10 +187,14 @@ static void xcp_dump_usb(xcp_usb_backend *usb)
 
 /* --------------------------------------------------------------------------- */
 
+static int xcp_fw_is_1100(uint32_t fw)
+{
+    return ((fw >> 16) & 0xFFFFu) == 0x1100u;
+}
+
 /*
- * One-time process bring-up: load libSceMbus, scePadInit, and patch
- * scePadVirtualDeviceAddDevice. None of this creates a device, so none of it can
- * put anything on screen - safe to do before any input source exists.
+ * One-time process bring-up: load libSceMbus, raise credentials, scePadInit.
+ * None of this creates a device, so none of it can put anything on screen.
  */
 static int xcp_pad_setup_once(void)
 {
@@ -188,18 +207,13 @@ static int xcp_pad_setup_once(void)
         return -1;
     }
 
-    if (xcp_vda_pad_init() != 0) {
-        xcp_notify("XCP: scePadInit failed");
-        return -1;
+    if (xcp_vda_creds_raise() != 0) {
+        printf(XCP_TAG "continuing without raised credentials; the FW 11.00 "
+                       "patch fallback may still work\n");
     }
 
-    /*
-     * The one change that makes the rest possible: without it AddDevice always
-     * answers 0x803B0006 ("assignment screen pending") and this process owns no
-     * pad. Must be in place before the first AddDevice.
-     */
-    if (xcp_pad_patch_vda() != 0) {
-        xcp_notify("XCP: libScePad patch failed");
+    if (xcp_vda_pad_init() != 0) {
+        xcp_notify("XCP: scePadInit failed");
         return -1;
     }
 
@@ -219,34 +233,50 @@ static int xcp_create_virtual_pad(xcp_vda_device *out)
 {
     xcp_klog_watch watch;
     uint64_t       device_id;
+    uint32_t       fw;
 
     if (xcp_pad_setup_once() != 0) return -1;
 
     if (xcp_klog_watch_open(&watch) != 0) {
-        /* The usual reason: a klog client (GoldHEN's log server) holds it. */
-        xcp_notify("XCP: /dev/klog busy - no klog client, retry");
-        printf(XCP_TAG "without /dev/klog the handle cannot be learned, and a "
-                       "device we cannot address is worse than none. Not "
-                       "creating one.\n");
+        xcp_notify("XCP: klog unavailable - no klog client, retry");
+        printf(XCP_TAG "without klog the handle cannot be learned, and a device "
+                       "we cannot address is worse than none. Not creating "
+                       "one.\n");
         return -1;
     }
 
-    /* Anything already in the log is older than the device we are about to
-     * create and must never be mistaken for it. */
+    fw = kernel_get_fw_version();
+
     xcp_klog_watch_drain(&watch);
-
-    /* The marker goes in BEFORE the call, not after: with the libScePad patch
-     * applied, AddDevice adds the device synchronously, so the kernel logs the
-     * event while the call is still running. The reader below only trusts an
-     * event that follows the marker, so a marker written afterwards would make
-     * us discard our own device. */
-    xcp_klog_watch_mark(XCP_TAG "marker add");
-
-    xcp_vda_add_device(XCP_VDA_USER_SELECT);
-
+    xcp_klog_watch_mark(XCP_TAG "marker add direct");
+    printf(XCP_TAG "vda: direct AddDevice (type %d)\n",
+           XCP_VDA_DEVICE_TYPE_DIRECT);
+    xcp_vda_add_device(XCP_VDA_USER_SELECT, XCP_VDA_DEVICE_TYPE_DIRECT, 1);
     device_id = xcp_klog_watch_wait_for_add(&watch, NULL, XCP_KLOG_WAIT_MS);
 
-    /* Let GoldHEN's log server have the device back the moment we are done. */
+    if (!device_id && xcp_fw_is_1100(fw)) {
+        printf(XCP_TAG "vda: direct AddDevice produced no klog event; trying "
+                       "the FW 11.00 callsite patch fallback\n");
+        if (xcp_pad_patch_vda() == 0) {
+            xcp_klog_watch_drain(&watch);
+            xcp_klog_watch_mark(XCP_TAG "marker add patched");
+            printf(XCP_TAG "vda: patched AddDevice (type %d)\n",
+                   XCP_VDA_DEVICE_TYPE_LEGACY);
+            xcp_vda_add_device(XCP_VDA_USER_SELECT,
+                               XCP_VDA_DEVICE_TYPE_LEGACY, 0);
+            device_id = xcp_klog_watch_wait_for_add(&watch, NULL,
+                                                    XCP_KLOG_WAIT_MS);
+        } else {
+            printf(XCP_TAG "vda: callsite patch unavailable; no fallback for "
+                           "this firmware\n");
+        }
+    } else if (!device_id) {
+        printf(XCP_TAG "vda: no callsite patch for firmware %02X.%02X; direct "
+                       "path did not produce a device\n",
+               (unsigned)((fw >> 24) & 0xFFu),
+               (unsigned)((fw >> 16) & 0xFFu));
+    }
+
     xcp_klog_watch_close(&watch);
 
     if (!device_id) {
@@ -294,14 +324,20 @@ int main(int argc, char *argv[])
     xcp_usb_backend    *usb;
     void               *handle = NULL;
     xcp_controller_type type    = XCP_CTRL_NONE;
+    xcp_controller_type previous_type = XCP_CTRL_NONE;
     uint64_t            last_scan = 0;
     uint64_t            last_try  = 0;
     uint64_t            last_input_us = 0;
     int                 have_state = 0;
+    int                 skip_first_report = 0;
     uint32_t            touchpad_prev = 0;
     int                 touchpad_latched = 0;
+    int                 touchpad_passthrough = 0;
     uint64_t            touchpad_last_us = 0;
     int                 logged_insert = 0;
+    xcp_hid_map         hid_map;
+    int                 have_hid_map = 0;
+    xcp_config          source_cfg;
     xcp_pad_state       state;
 
     (void)argc;
@@ -321,12 +357,21 @@ int main(int argc, char *argv[])
      */
     xcp_log_open();
 
-    printf("\n");
-    printf(XCP_TAG "=============================================\n");
-    printf(XCP_TAG "virtual-pad payload starting\n");
-    printf(XCP_TAG "sizeof(OrbisPadData) = %u\n", (unsigned)sizeof(OrbisPadData));
-    printf(XCP_TAG "log file: %s\n", XCP_PAYLOAD_LOG_PATH);
-    printf(XCP_TAG "=============================================\n");
+    {
+        uint32_t fw = kernel_get_fw_version();
+
+        printf("\n");
+        printf(XCP_TAG "=============================================\n");
+        printf(XCP_TAG "virtual-pad payload %s starting (built %s %s)\n",
+               XCP_PAYLOAD_VERSION, __DATE__, __TIME__);
+        printf(XCP_TAG "firmware %02X.%02X (raw 0x%08X)\n",
+               (unsigned)((fw >> 24) & 0xFFu),
+               (unsigned)((fw >> 16) & 0xFFu), (unsigned)fw);
+        printf(XCP_TAG "sizeof(OrbisPadData) = %u\n",
+               (unsigned)sizeof(OrbisPadData));
+        printf(XCP_TAG "log file: %s\n", XCP_PAYLOAD_LOG_PATH);
+        printf(XCP_TAG "=============================================\n");
+    }
 
     /* Bring USB up first: its listing is the diagnostic we want even if the
      * rest of the bring-up fails. */
@@ -338,15 +383,19 @@ int main(int argc, char *argv[])
     xcp_dump_usb(usb);
 
     /*
-     * No virtual pad yet, and none until a real controller is open. An ownerless
-     * virtual device is exactly what raises the assignment prompt, and a prompt
-     * with nothing attached to answer it is a hung console. So the rule is: the
-     * virtual pad lives exactly as long as the input source it stands in for.
+     * No virtual pad yet, and none until a real controller has opened *and*
+     * sent its first valid report. An ownerless virtual device is exactly what
+     * raises the assignment prompt, and a prompt with nothing attached to
+     * answer it is a hung console. So the rule is: the virtual pad lives
+     * exactly as long as the input source it stands in for, and only starts
+     * once that source has proved it can speak.
      */
     memset(&dev, 0, sizeof(dev));
     dev.handle = -1;
 
     memset(&state, 0, sizeof(state));
+    memset(&hid_map, 0, sizeof(hid_map));
+    xcp_config_default(&source_cfg);
     xcp_pad_state_centre_sticks(&state);
 
     for (;;) {
@@ -358,27 +407,70 @@ int main(int argc, char *argv[])
 
             last_scan = now;
             if (xcp_usb_find(usb, NULL, XCP_CTRL_NONE, &info)) {
+                xcp_controller_type opened_type = info.type;
+
                 handle = usb->open(NULL, &info);
                 if (!handle) {
                     printf(XCP_TAG "found %s but could not open it\n", info.name);
                 } else {
-                    type = info.type;
+                    have_hid_map = 0;
+                    if (opened_type == XCP_CTRL_HID_GENERIC) {
+                        if (!usb->get_hid_map ||
+                            !usb->get_hid_map(NULL, handle, &hid_map)) {
+                            printf(XCP_TAG "generic HID %s has no usable "
+                                           "gamepad descriptor\n", info.name);
+                            usb->close(NULL, handle);
+                            handle = NULL;
+                        } else {
+                            have_hid_map = 1;
+                        }
+                    }
+                }
+                if (handle) {
+                    xcp_config_for_source(opened_type, previous_type, &source_cfg);
+                    type = opened_type;
+                    previous_type = opened_type;
+                    if (source_cfg.manba_post_switch_layout) {
+                        printf(XCP_TAG "post-Switch Xbox face layout workaround "
+                                       "active\n");
+                    }
                     if (usb->start) usb->start(NULL, handle, type);
                     last_input_us = now;
+                    have_state = 0;
+                    xcp_pad_state_centre_sticks(&state);
+                    state.connected = 0;
+                    /*
+                     * Only the Xbox drivers publish the synthetic all-neutral
+                     * sample with 0x8000/0x7FFF sticks. A Switch first packet
+                     * can already carry a held face button, so never drop that.
+                     */
+                    skip_first_report =
+                        (type == XCP_CTRL_XBOX360 ||
+                         type == XCP_CTRL_XBOXONE ||
+                         type == XCP_CTRL_XBOX_SERIES);
+                    xcp_capture_reset();
+                    logged_insert = 0;
                     touchpad_latched = 0;
                     touchpad_prev = 0;
+                    /*
+                     * DualSense has a real touchpad button. Do not turn it into
+                     * the Manba-style 250 ms macro latch: a held click must stay
+                     * held until the pad releases it.
+                     */
+                    touchpad_passthrough =
+                        (type == XCP_CTRL_DUALSENSE);
                     printf(XCP_TAG "input source ready: %s (%s)\n",
                            info.name, xcp_controller_type_name(type));
-                    xcp_notify("XCP: controller detected");
                 }
             }
         }
 
         /* --- keep the virtual pad in step with the input source -------- */
-        if (handle && !dev.owned && now - last_try >= XCP_PAD_RETRY_INTERVAL_US) {
+        if (handle && have_state && !dev.owned &&
+            now - last_try >= XCP_PAD_RETRY_INTERVAL_US) {
             last_try = now;
             if (xcp_create_virtual_pad(&dev) == 0) {
-                xcp_notify("XCP: virtual pad ready - press a button");
+                xcp_notify("XCP: virtual pad ready");
             }
         }
         if (!handle && dev.owned) {
@@ -399,24 +491,50 @@ int main(int argc, char *argv[])
             if (ret == XCP_USB_OK) {
                 last_input_us = now;
                 xcp_capture_report(report, len);
-                if (xcp_decode(type, report, len, NULL, &state)) {
+                if (skip_first_report) {
                     /*
-                     * The Manba's M-buttons are firmware macros: an "L3+R3"
-                     * mapping arrives as a burst (L3, then L3+R3, then R3, then
-                     * neither) instead of a held chord, so the raw chord is
-                     * true for about one report and a game never sees the
-                     * click. Latch it on the first chord and hold it while
-                     * either stick click is still coming; the timeout is
-                     * applied below, every iteration, so it releases on time
-                     * even when the pad sends nothing at all.
+                     * The Xbox 360 driver publishes one synthetic report when
+                     * the interface is opened: sticks at 0x8000/0x7FFF, which
+                     * our signed decoder reads as full up-left. Feeding it made
+                     * the assignment cursor jump once before the pad was even
+                     * touched. Drop that first sample; the next real report is
+                     * 16 ms away and is the one the user is actually sending.
                      */
-                    if (state.buttons & XCP_BTN_TOUCHPAD) {
-                        touchpad_latched = 1;
-                        touchpad_last_us = now;
-                    } else if (state.buttons & (XCP_BTN_L3 | XCP_BTN_R3)) {
-                        touchpad_last_us = now;
+                    skip_first_report = 0;
+                    printf(XCP_TAG "ignoring the first report (driver init "
+                                   "state)\n");
+                } else {
+                    int decoded = 0;
+
+                    if (type == XCP_CTRL_HID_GENERIC) {
+                        decoded = have_hid_map &&
+                                  xcp_hid_decode(&hid_map, report, len, &state);
+                    } else {
+                        decoded = xcp_decode(type, report, len, &source_cfg,
+                                             &state);
                     }
-                    have_state = 1;
+                    if (decoded) {
+                        /*
+                         * The Manba's M-buttons are firmware macros: an
+                         * "L3+R3" mapping arrives as a burst (L3, then
+                         * L3+R3, then R3, then neither) instead of a held
+                         * chord, so the raw chord is true for about one report
+                         * and a game never sees the click. Latch it on the
+                         * first chord and hold it while either stick click is
+                         * still coming; the timeout is applied below, every
+                         * iteration, so it releases on time even when the pad
+                         * sends nothing at all.
+                         */
+                        if (!touchpad_passthrough &&
+                            (state.buttons & XCP_BTN_TOUCHPAD)) {
+                            touchpad_latched = 1;
+                            touchpad_last_us = now;
+                        } else if (!touchpad_passthrough &&
+                                   (state.buttons & (XCP_BTN_L3 | XCP_BTN_R3))) {
+                            touchpad_last_us = now;
+                        }
+                        have_state = 1;
+                    }
                 }
                 /* A report that does not decode is ignored on purpose: some pads
                  * interleave vendor messages with input reports. */
@@ -454,10 +572,11 @@ int main(int argc, char *argv[])
             if (touchpad_latched) {
                 state.buttons &= ~(XCP_BTN_L3 | XCP_BTN_R3);
                 state.buttons |= XCP_BTN_TOUCHPAD;
-            } else {
+            } else if (!touchpad_passthrough) {
                 state.buttons &= ~XCP_BTN_TOUCHPAD;
             }
-            if (touchpad_latched != (int)touchpad_prev) {
+            if (!touchpad_passthrough &&
+                touchpad_latched != (int)touchpad_prev) {
                 touchpad_prev = (uint32_t)touchpad_latched;
                 printf(XCP_TAG "touchpad click %s\n",
                        touchpad_latched ? "down" : "up");

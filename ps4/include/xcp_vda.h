@@ -39,7 +39,8 @@ int32_t scePadSetProcessPrivilege(int32_t privilege);
  * not by itself a failure: the caller has to wait for the kernel-log event that
  * names the device (see xcp_klog_watch.h).
  *
- * `param` is a pointer to xcp_vda_add_param (32 bytes); device_type is 3.
+ * `param` is a pointer to xcp_vda_add_param (32 bytes); device_type is 1 on
+ * the direct path, 3 on the patched fallback.
  */
 int32_t scePadVirtualDeviceAddDevice(void *param, int32_t device_type);
 int32_t scePadVirtualDeviceDeleteDevice(int32_t handle);
@@ -48,8 +49,11 @@ int32_t scePadVirtualDeviceGetRemoteSetting(int32_t handle, void *setting);
 
 /* --- Tunables ------------------------------------------------------------ */
 
-/* The device type a Remote Play pad uses. 3 is what the known caller passes. */
-#define XCP_VDA_DEVICE_TYPE 3
+/* Device types: 1 is what Remote Play uses on 13.52; 3 is the type confirmed
+ * on 11.00. The direct path uses 1, the patched fallback uses 3. */
+#define XCP_VDA_DEVICE_TYPE_DIRECT 1
+#define XCP_VDA_DEVICE_TYPE_LEGACY 3
+#define XCP_VDA_DEVICE_TYPE XCP_VDA_DEVICE_TYPE_LEGACY
 
 /*
  * Creating the device for user 1 makes it arrive UNASSIGNED, so the PS4 opens
@@ -102,7 +106,11 @@ int xcp_vda_pad_init(void);
  * success - see the note on scePadVirtualDeviceAddDevice above. Never fatal:
  * the caller waits for the kernel-log event either way.
  */
-int32_t xcp_vda_add_device(int32_t user_id);
+int32_t xcp_vda_add_device(int32_t user_id, int32_t device_type, int sentinel);
+
+int xcp_vda_creds_raise(void);
+int xcp_vda_creds_restore(void);
+int xcp_vda_creds_active(void);
 
 /*
  * Fill in `out` from the DeviceId the kernel log announced. No PS4 calls.

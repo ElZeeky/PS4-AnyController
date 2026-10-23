@@ -29,30 +29,37 @@
 /* How many pads we are willing to keep open at once. */
 #define XCP_OPEN_MAX 2
 
-/*
- * libusb's LIBUSB_ERROR_TIMEOUT. Not present in the vendored Usbd.h, which only
- * declares the transfer *status* enum, so it is stated here by value and must be
- * confirmed from a real capture on the console: if a read timeout shows up as
- * something else, this is the line to change.
- */
-#define XCP_LIBUSB_ERROR_TIMEOUT (-7)
+/* How many interfaces we are willing to claim on one device. */
+#define XCP_IFACE_MAX 8
 
 typedef struct xcp_sceusbd_slot {
     libusb_device_handle *handle;
     xcp_controller_type   type;
     int                   claimed;
-    int32_t               interface;    /* which one we claimed            */
+    int32_t               interface;    /* main interface we claimed       */
+    int32_t               claimed_ifaces[XCP_IFACE_MAX];
+    int                   claimed_count;
     uint8_t               endpoint;     /* interrupt IN endpoint to read   */
+    uint8_t               out_endpoint; /* interrupt OUT endpoint, Switch  */
     int                   endpoint_set; /* 0 = fall back to the type's own */
+    int                   switch_started;
+    int                   switch_hs_step;
+    int                   switch_sub_step;
+    uint64_t              switch_next_us;
+    uint64_t              last_connected_check_us;
+    uint8_t               switch_seq;
+    xcp_hid_map           hid_map;
+    int                   hid_map_ok;
 } xcp_sceusbd_slot;
 
 /*
  * The sysroot declares struct libusb_endpoint_descriptor only as a forward
  * reference (orbis/_types/libusb.h uses `struct libusb_endpoint_descriptor *`
- * but never defines it), so its layout is stated here. These are the standard
- * libusb fields, and the three we read - bEndpointAddress, bmAttributes and
- * wMaxPacketSize - sit at fixed offsets 2/3/4 whatever the tail looks like.
- * Every entry is nevertheless validated by its bLength before use.
+ * but never defines it), so its layout is stated here. The array is made of
+ * aligned structs, NOT packed 7-byte USB descriptors: using a 7-byte stride
+ * reads the second endpoint from inside the first and silently loses the OUT
+ * endpoint (Switch Pro init needs it). The tail fields and alignment match the
+ * libusb ABI shipped in freebsd-9.3/libusb.h.
  */
 struct xcp_libusb_endpoint {
     uint8_t  bLength;
@@ -61,15 +68,16 @@ struct xcp_libusb_endpoint {
     uint8_t  bmAttributes;
     uint16_t wMaxPacketSize;
     uint8_t  bInterval;
-};
+    uint8_t  bRefresh;
+    uint8_t  bSynchAddress;
+    unsigned char *extra;
+    int      extra_length;
+} __attribute__((aligned(sizeof(void *))));
 
 #define XCP_EP_DESC_SIZE   7u
 #define XCP_EP_XFER_MASK   0x03u
 #define XCP_EP_XFER_INTR   0x03u
 #define XCP_EP_DIR_MASK    0x80u
-
-/* How many interfaces we are willing to try before giving up. */
-#define XCP_IFACE_MAX 8
 
 static libusb_device    *g_scan[XCP_SCAN_MAX];
 static int               g_scan_count;
@@ -79,6 +87,141 @@ static int               g_scan_count;
 static libusb_device   **g_device_list;
 static xcp_sceusbd_slot  g_slots[XCP_OPEN_MAX];
 static int               g_init_done;
+
+/*
+ * The vendored Usbd.h declares these with an empty parameter list (and
+ * DetachKernelDriver as returning void), but the implementation takes
+ * (handle, interface) and returns an int. Give the symbol a distinct C name
+ * with the real prototype so we can use the result without fighting the
+ * header. This is the same call AnyPad makes.
+ */
+extern int xcp_sceusbd_detach_kernel(libusb_device_handle *, int)
+    __asm__("sceUsbdDetachKernelDriver");
+
+/* The endpoint array is made of aligned structs, not packed descriptors. */
+static int iface_endpoints(const struct libusb_interface_descriptor *alt,
+                           uint8_t *in, uint8_t *out)
+{
+    const struct xcp_libusb_endpoint *eps;
+    uint8_t found_in = 0, found_out = 0;
+    uint8_t j;
+
+    if (!alt) return 0;
+    eps = (const struct xcp_libusb_endpoint *)(const void *)alt->endpoint;
+    for (j = 0; eps && j < alt->bNumEndpoints; j++) {
+        const struct xcp_libusb_endpoint *ep = &eps[j];
+        int intr, dir_in;
+
+        if (ep->bLength != XCP_EP_DESC_SIZE) continue;
+        intr   = ((ep->bmAttributes & XCP_EP_XFER_MASK) == XCP_EP_XFER_INTR);
+        dir_in = ((ep->bEndpointAddress & XCP_EP_DIR_MASK) != 0);
+        if (intr && dir_in && !found_in)  found_in = ep->bEndpointAddress;
+        if (intr && !dir_in && !found_out) found_out = ep->bEndpointAddress;
+    }
+    if (in) *in = found_in;
+    if (out) *out = found_out;
+    return found_in != 0;
+}
+
+static int iface_matches_type(const struct libusb_interface_descriptor *alt,
+                              xcp_controller_type type)
+{
+    if (!alt) return 0;
+    switch (type) {
+    case XCP_CTRL_XBOX360:
+        return alt->bInterfaceClass == 0xFF &&
+               alt->bInterfaceSubClass == 0x5D &&
+               alt->bInterfaceProtocol == 0x01;
+    case XCP_CTRL_XBOXONE:
+    case XCP_CTRL_XBOX_SERIES:
+        return alt->bInterfaceClass == 0xFF &&
+               alt->bInterfaceSubClass == 0x47 &&
+               alt->bInterfaceProtocol == 0xD0;
+    case XCP_CTRL_SWITCH:
+    case XCP_CTRL_SWITCH_PRO:
+    case XCP_CTRL_DUALSENSE:
+        return alt->bInterfaceClass == 0x03;
+    case XCP_CTRL_HID_GENERIC:
+        return alt->bInterfaceClass == 0x03 &&
+               alt->bInterfaceSubClass == 0 &&
+               alt->bInterfaceProtocol == 0;
+    case XCP_CTRL_NONE:
+    default:
+        return 0;
+    }
+}
+
+/*
+ * Pick the interface a pad actually streams on. A 2.4 GHz receiver can expose
+ * an XInput group, a HID gamepad and a keyboard at once; interface 0 + EP 0x81
+ * is not a safe guess. Prefer the interface class that matches the ids, then a
+ * known Xbox class, then a HID gamepad candidate.
+ */
+static int sceusbd_choose_iface(const struct libusb_config_descriptor *cfg,
+                                xcp_controller_type type, int preferred,
+                                int *iface_out, uint8_t *in_out,
+                                uint8_t *out_out, uint8_t *class_out,
+                                uint8_t *sub_out, uint8_t *proto_out)
+{
+    int best = -1, best_score = -1;
+    uint8_t best_in = 0, best_out = 0;
+    uint8_t best_class = 0, best_sub = 0, best_proto = 0;
+    uint8_t i;
+
+    if (!cfg || !cfg->interface) return 0;
+
+    for (i = 0; i < cfg->bNumInterfaces && i < XCP_IFACE_MAX; i++) {
+        const struct libusb_interface *iface = &cfg->interface[i];
+        const struct libusb_interface_descriptor *alt;
+        uint8_t in = 0, out = 0;
+        int score = 0;
+
+        if (iface->num_altsetting <= 0) continue;
+        alt = &iface->altsetting[0];
+        if (!iface_endpoints(alt, &in, &out)) continue;
+
+        if (preferred >= 0 && alt->bInterfaceNumber == (uint8_t)preferred) {
+            score = 100;
+        } else if (iface_matches_type(alt, type)) {
+            score = 40;
+        } else if (alt->bInterfaceClass == 0xFF &&
+                   alt->bInterfaceSubClass == 0x5D &&
+                   alt->bInterfaceProtocol == 0x01) {
+            score = 30; /* XInput */
+        } else if (alt->bInterfaceClass == 0xFF &&
+                   alt->bInterfaceSubClass == 0x47 &&
+                   alt->bInterfaceProtocol == 0xD0) {
+            score = 28; /* GIP */
+        } else if (alt->bInterfaceClass == 0x03 &&
+                   alt->bInterfaceSubClass == 0 &&
+                   alt->bInterfaceProtocol == 0) {
+            score = 20; /* HID gamepad candidate */
+        } else if (alt->bInterfaceClass == 0x03) {
+            score = 10;
+        } else {
+            score = 1;
+        }
+
+        if (score > best_score) {
+            best_score = score;
+            best = (int)alt->bInterfaceNumber;
+            best_in = in;
+            best_out = out;
+            best_class = alt->bInterfaceClass;
+            best_sub = alt->bInterfaceSubClass;
+            best_proto = alt->bInterfaceProtocol;
+        }
+    }
+
+    if (best < 0) return 0;
+    if (iface_out) *iface_out = best;
+    if (in_out)    *in_out = best_in;
+    if (out_out)   *out_out = best_out;
+    if (class_out) *class_out = best_class;
+    if (sub_out)   *sub_out = best_sub;
+    if (proto_out) *proto_out = best_proto;
+    return 1;
+}
 
 /* ---------------------------------------------------------------------------
  * Internals
@@ -118,8 +261,10 @@ static void sceusbd_shutdown(void *ctx)
     (void)ctx;
     for (i = 0; i < XCP_OPEN_MAX; i++) {
         if (g_slots[i].handle) {
-            if (g_slots[i].claimed) {
-                sceUsbdReleaseInterface(g_slots[i].handle, g_slots[i].interface);
+            int j;
+            for (j = 0; j < g_slots[i].claimed_count; j++) {
+                sceUsbdReleaseInterface(g_slots[i].handle,
+                                        g_slots[i].claimed_ifaces[j]);
             }
             sceUsbdClose(g_slots[i].handle);
             g_slots[i].handle  = NULL;
@@ -157,8 +302,14 @@ static int sceusbd_enumerate(void *ctx, xcp_usb_device_info *out, int max)
 
     for (i = 0; i < count && written < max; i++) {
         struct libusb_device_descriptor desc;
+        struct libusb_config_descriptor *cfg = NULL;
         xcp_usb_device_info             info;
         xcp_controller_type             type;
+        uint8_t                         iface_class = 0;
+        uint8_t                         iface_sub = 0;
+        uint8_t                         iface_proto = 0;
+        int                             iface = -1;
+        int                             has_in = 0;
         int                             scan_index;
 
         if (g_scan_count >= XCP_SCAN_MAX) break;
@@ -168,10 +319,32 @@ static int sceusbd_enumerate(void *ctx, xcp_usb_device_info *out, int max)
 
         type = xcp_controller_type_for_ids(desc.idVendor, desc.idProduct);
 
+        if (sceUsbdGetConfigDescriptor(list[i], 0, &cfg) == 0 && cfg) {
+            has_in = sceusbd_choose_iface(cfg, type, -1, &iface, NULL, NULL,
+                                          &iface_class, &iface_sub, &iface_proto);
+            if (has_in) {
+                type = xcp_controller_type_for_interface(desc.idVendor,
+                                                         desc.idProduct,
+                                                         iface_class, iface_sub,
+                                                         iface_proto, 1);
+            }
+            sceUsbdFreeConfigDescriptor(cfg);
+        }
+        if (!has_in) {
+            type = xcp_controller_type_for_interface(desc.idVendor,
+                                                     desc.idProduct,
+                                                     0, 0, 0, 0);
+        }
+
         memset(&info, 0, sizeof(info));
-        info.vid  = desc.idVendor;
-        info.pid  = desc.idProduct;
-        info.type = type;
+        info.vid              = desc.idVendor;
+        info.pid              = desc.idProduct;
+        info.type             = type;
+        info.iface_class      = iface_class;
+        info.iface_subclass   = iface_sub;
+        info.iface_protocol   = iface_proto;
+        info.iface_number     = iface >= 0 ? (uint8_t)iface : 0;
+        info.has_interrupt_in = (uint8_t)(has_in != 0);
         /*
          * Address the device by its position in OUR cache, not by its position
          * in the bus list: a device skipped above (descriptor read failed) must
@@ -179,8 +352,15 @@ static int sceusbd_enumerate(void *ctx, xcp_usb_device_info *out, int max)
          */
         scan_index = g_scan_count;
         snprintf(info.path, XCP_USB_PATH_MAX, "sceusbd:%d", scan_index);
-        snprintf(info.name, XCP_USB_NAME_MAX, "%04X:%04X",
-                 (unsigned)desc.idVendor, (unsigned)desc.idProduct);
+        if (has_in) {
+            snprintf(info.name, XCP_USB_NAME_MAX, "%04X:%04X iface %d (%02X/%02X/%02X)",
+                     (unsigned)desc.idVendor, (unsigned)desc.idProduct,
+                     iface, (unsigned)iface_class, (unsigned)iface_sub,
+                     (unsigned)iface_proto);
+        } else {
+            snprintf(info.name, XCP_USB_NAME_MAX, "%04X:%04X",
+                     (unsigned)desc.idVendor, (unsigned)desc.idProduct);
+        }
 
         /* Keep the pointer alive so open() can use it; the list stays alive
          * until the next enumerate()/shutdown frees it. */
@@ -205,26 +385,71 @@ static int sceusbd_enumerate(void *ctx, xcp_usb_device_info *out, int max)
  *
  * Returns 0 with both out parameters filled, or -1 if nothing could be claimed.
  */
+static void slot_remember_iface(xcp_sceusbd_slot *slot, int iface)
+{
+    if (!slot || slot->claimed_count >= XCP_IFACE_MAX) return;
+    slot->claimed_ifaces[slot->claimed_count++] = (int32_t)iface;
+}
+
+static int slot_has_iface(const xcp_sceusbd_slot *slot, int iface)
+{
+    int i;
+
+    for (i = 0; i < slot->claimed_count; i++) {
+        if (slot->claimed_ifaces[i] == (int32_t)iface) return 1;
+    }
+    return 0;
+}
+
+static int claim_one(libusb_device_handle *handle, int iface, const char *what,
+                     xcp_sceusbd_slot *slot)
+{
+    int32_t ret;
+
+    /*
+     * The system driver may hold the interface. Detach it first, as AnyPad
+     * does; otherwise a GIP pad can be mistaken for a headset and a HID
+     * interface for a keyboard. Calling this when no driver is active is
+     * harmless on libusb.
+     */
+    ret = xcp_sceusbd_detach_kernel(handle, iface);
+    klog(XCP_TAG "  detach %s iface %d -> %d\n", what, iface, (int)ret);
+
+    ret = sceUsbdClaimInterface(handle, iface);
+    klog(XCP_TAG "  claim %s iface %d -> %d\n", what, iface, (int)ret);
+    if (ret != 0) return 0;
+
+    slot_remember_iface(slot, iface);
+    return 1;
+}
+
 static int sceusbd_claim_input(libusb_device *dev, libusb_device_handle *handle,
-                               int32_t *iface_out, uint8_t *endpoint_out)
+                               const xcp_usb_device_info *info,
+                               xcp_sceusbd_slot *slot)
 {
     struct libusb_config_descriptor *cfg = NULL;
     int32_t ret;
+    int     preferred = -1;
     int     claimed = -1;
+    uint8_t endpoint = 0;
+    uint8_t out_endpoint = 0;
     uint8_t i;
 
-    *iface_out    = 0;
-    *endpoint_out = 0;
+    if (!slot) return -1;
+    slot->interface = 0;
+    slot->endpoint = 0;
+    slot->out_endpoint = 0;
+    slot->endpoint_set = 0;
+
+    if (info && info->has_interrupt_in) preferred = (int)info->iface_number;
 
     ret = sceUsbdGetConfigDescriptor(dev, 0, &cfg);
     if (ret != 0 || !cfg || !cfg->interface) {
         /* No descriptors. Behave exactly as before this change. */
         klog(XCP_TAG "no config descriptor (%d); claiming interface 0\n", (int)ret);
-        ret = sceUsbdClaimInterface(handle, 0);
-        if (ret != 0) {
-            klog(XCP_TAG "sceUsbdClaimInterface(0) failed (%d)\n", (int)ret);
-            return -1;
-        }
+        if (!claim_one(handle, 0, "fallback", slot)) return -1;
+        slot->interface = 0;
+        slot->claimed = 1;
         return 0;
     }
 
@@ -232,30 +457,25 @@ static int sceusbd_claim_input(libusb_device *dev, libusb_device_handle *handle,
          (unsigned)cfg->bNumInterfaces, (unsigned)cfg->bConfigurationValue);
 
     for (i = 0; i < cfg->bNumInterfaces && i < XCP_IFACE_MAX; i++) {
-        const struct libusb_interface             *iface = &cfg->interface[i];
-        const struct libusb_interface_descriptor  *alt;
-        const unsigned char                       *raw;
-        uint8_t                                    found_ep = 0;
-        uint8_t                                    j;
+        const struct libusb_interface            *iface = &cfg->interface[i];
+        const struct libusb_interface_descriptor *alt;
+        const struct xcp_libusb_endpoint         *eps;
+        uint8_t in = 0, out = 0, j;
 
         if (iface->num_altsetting <= 0) {
             klog(XCP_TAG "  iface %u: no altsetting\n", (unsigned)i);
             continue;
         }
         alt = &iface->altsetting[0];
-
         klog(XCP_TAG "  iface %u: class %02X sub %02X proto %02X, %u endpoint(s)\n",
              (unsigned)alt->bInterfaceNumber, (unsigned)alt->bInterfaceClass,
              (unsigned)alt->bInterfaceSubClass, (unsigned)alt->bInterfaceProtocol,
              (unsigned)alt->bNumEndpoints);
 
-        raw = (const unsigned char *)(const void *)alt->endpoint;
-        for (j = 0; raw && j < alt->bNumEndpoints; j++) {
-            const struct xcp_libusb_endpoint *ep =
-                (const struct xcp_libusb_endpoint *)(const void *)
-                (raw + (unsigned)j * XCP_EP_DESC_SIZE);
-            int intr;
-            int in;
+        eps = (const struct xcp_libusb_endpoint *)(const void *)alt->endpoint;
+        for (j = 0; eps && j < alt->bNumEndpoints; j++) {
+            const struct xcp_libusb_endpoint *ep = &eps[j];
+            int intr, dir_in;
 
             if (ep->bLength != XCP_EP_DESC_SIZE) {
                 klog(XCP_TAG "    endpoint %u: bLength %u is not a 7 byte "
@@ -263,50 +483,88 @@ static int sceusbd_claim_input(libusb_device *dev, libusb_device_handle *handle,
                      (unsigned)j, (unsigned)ep->bLength);
                 continue;
             }
-
-            intr = ((ep->bmAttributes & XCP_EP_XFER_MASK) == XCP_EP_XFER_INTR);
-            in   = ((ep->bEndpointAddress & XCP_EP_DIR_MASK) != 0);
-
+            intr   = ((ep->bmAttributes & XCP_EP_XFER_MASK) == XCP_EP_XFER_INTR);
+            dir_in = ((ep->bEndpointAddress & XCP_EP_DIR_MASK) != 0);
             klog(XCP_TAG "    ep 0x%02X %s%s maxpacket %u interval %u\n",
                  (unsigned)ep->bEndpointAddress,
-                 intr ? "interrupt" : "other", in ? " IN" : " OUT",
+                 intr ? "interrupt" : "other", dir_in ? " IN" : " OUT",
                  (unsigned)ep->wMaxPacketSize, (unsigned)ep->bInterval);
+            if (intr && dir_in && !in)  in = ep->bEndpointAddress;
+            if (intr && !dir_in && !out) out = ep->bEndpointAddress;
+        }
+    }
 
-            if (intr && in && !found_ep) {
-                found_ep = ep->bEndpointAddress;
+    if (sceusbd_choose_iface(cfg, info ? info->type : XCP_CTRL_NONE,
+                             preferred, &claimed, NULL, NULL, NULL, NULL, NULL)) {
+        const struct libusb_interface_descriptor *alt = NULL;
+
+        for (i = 0; i < cfg->bNumInterfaces && i < XCP_IFACE_MAX; i++) {
+            const struct libusb_interface *iface = &cfg->interface[i];
+            if (iface->num_altsetting > 0 &&
+                (int)iface->altsetting[0].bInterfaceNumber == claimed) {
+                alt = &iface->altsetting[0];
+                break;
             }
         }
+        if (alt) (void)iface_endpoints(alt, &endpoint, &out_endpoint);
+        if (!claim_one(handle, claimed, "main", slot)) {
+            claimed = -1;
+        }
+    }
 
-        if (!found_ep) continue; /* not an input interface */
+    if (claimed < 0) {
+        /* Nothing looked like an input interface, or the claim was refused:
+         * fall back to interface 0, which is what this backend always did. */
+        klog(XCP_TAG "no claimable interrupt IN endpoint; trying interface 0\n");
+        if (!claim_one(handle, 0, "fallback", slot)) {
+            sceUsbdFreeConfigDescriptor(cfg);
+            return -1;
+        }
+        claimed = 0;
+        endpoint = 0;
+        out_endpoint = 0;
+    }
 
-        ret = sceUsbdClaimInterface(handle, (int32_t)alt->bInterfaceNumber);
-        klog(XCP_TAG "  claim iface %u -> %d\n",
-             (unsigned)alt->bInterfaceNumber, (int)ret);
+    /*
+     * Claim the interfaces the console would otherwise take for itself: audio
+     * (so it does not route TV sound to the pad) and, on Xbox/GIP pads, extra
+     * HID interfaces (often a keyboard). Failures are logged but not fatal.
+     */
+    for (i = 0; i < cfg->bNumInterfaces && i < XCP_IFACE_MAX; i++) {
+        const struct libusb_interface *iface = &cfg->interface[i];
+        const struct libusb_interface_descriptor *alt;
+        int extra;
 
-        if (ret == 0) {
-            claimed       = (int)alt->bInterfaceNumber;
-            *endpoint_out = found_ep;
-            break;
+        if (iface->num_altsetting <= 0) continue;
+        alt = &iface->altsetting[0];
+        if ((int)alt->bInterfaceNumber == claimed) continue;
+        if (slot_has_iface(slot, (int)alt->bInterfaceNumber)) continue;
+        /* Sony's pads keep their audio and HID side on the console. */
+        if (info && info->vid == XCP_VID_SONY) continue;
+
+        extra = alt->bInterfaceClass == 0x01; /* audio control/streaming */
+        if (!extra && alt->bInterfaceClass == 0x03 &&
+            info && info->type != XCP_CTRL_HID_GENERIC) {
+            extra = 1; /* keyboard/mouse side of an Xbox pad */
+        }
+        if (!extra) continue;
+
+        if (claim_one(handle, (int)alt->bInterfaceNumber,
+                      alt->bInterfaceClass == 0x01 ? "audio" : "extra HID", slot)) {
+            klog(XCP_TAG "  iface %u kept away from the console\n",
+                 (unsigned)alt->bInterfaceNumber);
         }
     }
 
     sceUsbdFreeConfigDescriptor(cfg);
 
-    if (claimed < 0) {
-        /* Nothing looked like an input interface, or every claim was refused:
-         * fall back to interface 0, which is what this backend always did. */
-        klog(XCP_TAG "no claimable interrupt IN endpoint; trying interface 0\n");
-        ret = sceUsbdClaimInterface(handle, 0);
-        if (ret != 0) {
-            klog(XCP_TAG "sceUsbdClaimInterface(0) failed (%d)\n", (int)ret);
-            return -1;
-        }
-        return 0;
-    }
-
-    *iface_out = claimed;
+    slot->interface = claimed;
+    slot->endpoint = (uint8_t)endpoint;
+    slot->out_endpoint = (uint8_t)out_endpoint;
+    slot->endpoint_set = (endpoint != 0);
+    slot->claimed = 1;
     klog(XCP_TAG "reading interrupt IN on EP 0x%02X of interface %d\n",
-         (unsigned)*endpoint_out, (int)claimed);
+         (unsigned)slot->endpoint, (int)slot->interface);
     return 0;
 }
 
@@ -344,20 +602,39 @@ static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
         return NULL;
     }
 
-    /*
-     * NOTE: sceUsbdDetachKernelDriver is declared with an empty parameter list in
-     * the vendored Usbd.h, so it cannot be given a handle. It is deliberately
-     * not called; see PROGRESS.md 4.4.
-     */
-
-    if (sceusbd_claim_input(dev, slot->handle, &slot->interface, &slot->endpoint) != 0) {
+    if (sceusbd_claim_input(dev, slot->handle, info, slot) != 0) {
         sceUsbdClose(slot->handle);
         slot->handle = NULL;
         return NULL;
     }
-    slot->claimed      = 1;
-    slot->endpoint_set = (slot->endpoint != 0);
-    slot->type         = info->type;
+    slot->type = info->type;
+
+    /*
+     * A Generic HID device is only accepted after its report descriptor says
+     * it is a gamepad. The descriptor also gives the bit position of every
+     * button and axis, so there is no per-clone table to maintain.
+     */
+    if (info->type == XCP_CTRL_HID_GENERIC) {
+        uint8_t desc[1024];
+        int     dlen = sceUsbdControlTransfer(slot->handle, 0x81, 0x06, 0x2200,
+                                              (uint16_t)slot->interface,
+                                              desc, sizeof(desc), 1000);
+        if (dlen <= 0 ||
+            !xcp_hid_parse_descriptor(desc, (size_t)dlen,
+                                      info->vid, info->pid, &slot->hid_map)) {
+            int j;
+            klog(XCP_TAG "generic HID: no gamepad descriptor (%d)\n", dlen);
+            for (j = 0; j < slot->claimed_count; j++) {
+                sceUsbdReleaseInterface(slot->handle, slot->claimed_ifaces[j]);
+            }
+            sceUsbdClose(slot->handle);
+            memset(slot, 0, sizeof(*slot));
+            return NULL;
+        }
+        slot->hid_map_ok = 1;
+        klog(XCP_TAG "generic HID: %u buttons, descriptor %d bytes\n",
+             (unsigned)slot->hid_map.button_count, dlen);
+    }
 
     klog(XCP_TAG "opened %s as %s\n", info->name,
          xcp_controller_type_name(info->type));
@@ -368,6 +645,60 @@ static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
 static int sceusbd_is_gip(xcp_controller_type type)
 {
     return type == XCP_CTRL_XBOXONE || type == XCP_CTRL_XBOX_SERIES;
+}
+
+static void sceusbd_switch_tick(xcp_sceusbd_slot *slot, uint64_t now)
+{
+    static const uint8_t hs[4][2] = {
+        { 0x80, 0x02 }, { 0x80, 0x03 }, { 0x80, 0x02 }, { 0x80, 0x04 },
+    };
+    static const uint8_t idle[8] = {
+        0x00, 0x01, 0x40, 0x40, 0x00, 0x01, 0x40, 0x40,
+    };
+    /* Output report 0x01 subcommands: full report mode, IMU on, vibration on,
+     * player-1 LED. A stock Pro Controller starts in simple report mode 0x3F,
+     * so without these it never sends the 0x30 report this decoder needs. */
+    static const uint8_t sub_id[4]  = { 0x03, 0x40, 0x48, 0x30 };
+    static const uint8_t sub_arg[4] = { 0x30, 0x01, 0x01, 0x01 };
+    static int errors;
+    uint8_t    packet[64];
+    uint8_t    out;
+    int32_t    transferred = 0;
+    int32_t    ret;
+
+    if (!slot || !slot->handle || !slot->switch_started) return;
+    if (now < slot->switch_next_us) return;
+
+    out = slot->out_endpoint ? slot->out_endpoint : 0x01;
+    memset(packet, 0, sizeof(packet));
+
+    if (slot->switch_hs_step < 4) {
+        packet[0] = hs[slot->switch_hs_step][0];
+        packet[1] = hs[slot->switch_hs_step][1];
+        slot->switch_hs_step++;
+        slot->switch_next_us = now + 100000u;
+    } else if (slot->switch_sub_step < 4) {
+        packet[0]  = 0x01;
+        packet[1]  = (uint8_t)(slot->switch_seq++ & 0x0Fu);
+        memcpy(packet + 2, idle, sizeof(idle));
+        packet[10] = sub_id[slot->switch_sub_step];
+        packet[11] = sub_arg[slot->switch_sub_step];
+        slot->switch_sub_step++;
+        slot->switch_next_us = now + 50000u;
+    } else {
+        packet[0] = 0x10;
+        packet[1] = (uint8_t)(slot->switch_seq++ & 0x0Fu);
+        memcpy(packet + 2, idle, sizeof(idle));
+        slot->switch_next_us = now + 500000u;
+    }
+
+    ret = sceUsbdInterruptTransfer(slot->handle, out, packet,
+                                   (int32_t)sizeof(packet), &transferred, 100);
+    if (ret != 0 && errors < 5) {
+        klog(XCP_TAG "Switch output on EP 0x%02X: ret=%d transferred=%d\n",
+             (unsigned)out, (int)ret, (int)transferred);
+        errors++;
+    }
 }
 
 static int sceusbd_start(void *ctx, void *handle, xcp_controller_type type)
@@ -394,8 +725,19 @@ static int sceusbd_start(void *ctx, void *handle, xcp_controller_type type)
 
     (void)ctx;
 
-    if (!sceusbd_is_gip(type)) return XCP_USB_OK;
     if (!slot || !slot->handle) return XCP_USB_ERROR;
+
+    if (type == XCP_CTRL_SWITCH_PRO) {
+        slot->switch_started  = 1;
+        slot->switch_hs_step  = 0;
+        slot->switch_sub_step = 0;
+        slot->switch_next_us  = 0;
+        slot->switch_seq      = 0;
+        sceusbd_switch_tick(slot, sceKernelGetProcessTime());
+        return XCP_USB_OK;
+    }
+
+    if (!sceusbd_is_gip(type)) return XCP_USB_OK;
 
     /* GIP input reports live on EP 0x82 and host messages go to EP 0x02. */
     ret = sceUsbdSetInterfaceAltSetting(slot->handle, slot->interface, 0);
@@ -438,10 +780,12 @@ static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
     if (buf_len == 0 || buf_len > 0x7FFFFFFF) return XCP_USB_ERROR;
 
     /* Whatever the descriptors said, if they said anything; otherwise the
-     * type's own convention: Xbox 360, PDP Switch and DualSense stream on
+     * type's own convention: Xbox 360, PDP/Switch Pro and DualSense stream on
      * EP 0x81, Xbox One/Series on EP 0x82. */
     endpoint = slot->endpoint_set ? slot->endpoint
                                   : (uint8_t)(sceusbd_is_gip(slot->type) ? 0x82 : 0x81);
+
+    sceusbd_switch_tick(slot, sceKernelGetProcessTime());
 
     ret = sceUsbdInterruptTransfer(slot->handle, endpoint, (unsigned char *)buf,
                                    (int32_t)buf_len, &transferred, (uint32_t)timeout_ms);
@@ -452,7 +796,38 @@ static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
         return XCP_USB_OK;
     }
 
-    if (ret == XCP_LIBUSB_ERROR_TIMEOUT) return XCP_USB_NO_DATA;
+    if (xcp_usb_status_is_timeout(ret)) {
+        uint64_t now = sceKernelGetProcessTime();
+
+        /*
+         * A timeout can also be the only thing a dead handle reports. Do not
+         * guess: ask libSceUsbd whether the device is still connected, once a
+         * second while the pad is idle. This keeps an idle pad open forever
+         * while still letting an unplugged idle pad release its virtual pad.
+         */
+        if (now - slot->last_connected_check_us >= 1000000u) {
+            int32_t connected;
+
+            slot->last_connected_check_us = now;
+            connected = sceUsbdCheckConnected(slot->handle);
+            /*
+             * This is a libusb-style status: 0 means connected, a negative
+             * error means the handle/device is gone. Do not test `<= 0`, or
+             * every idle pad would be torn down once a second.
+             */
+            if (connected < 0) {
+                static int logged_gone;
+                if (logged_gone < 4) {
+                    klog(XCP_TAG "read: ep 0x%02X timeout, "
+                                 "sceUsbdCheckConnected=%d -> device gone\n",
+                         (unsigned)endpoint, (int)connected);
+                    logged_gone++;
+                }
+                return XCP_USB_DISCONNECT;
+            }
+        }
+        return XCP_USB_NO_DATA;
+    }
 
     /*
      * The value here decides whether a transient hiccup tears the whole input
@@ -484,10 +859,23 @@ static void sceusbd_close(void *ctx, void *handle)
     if (!slot) return;
 
     if (slot->handle) {
-        if (slot->claimed) sceUsbdReleaseInterface(slot->handle, slot->interface);
+        int i;
+        for (i = 0; i < slot->claimed_count; i++) {
+            sceUsbdReleaseInterface(slot->handle, slot->claimed_ifaces[i]);
+        }
         sceUsbdClose(slot->handle);
     }
     memset(slot, 0, sizeof(*slot));
+}
+
+static int sceusbd_get_hid_map(void *ctx, void *handle, xcp_hid_map *out)
+{
+    xcp_sceusbd_slot *slot = (xcp_sceusbd_slot *)handle;
+
+    (void)ctx;
+    if (!slot || !out || !slot->hid_map_ok) return 0;
+    *out = slot->hid_map;
+    return 1;
 }
 
 static xcp_usb_backend g_sceusbd = {
@@ -499,6 +887,7 @@ static xcp_usb_backend g_sceusbd = {
     sceusbd_start,
     sceusbd_read,
     sceusbd_close,
+    sceusbd_get_hid_map,
 };
 
 xcp_usb_backend *xcp_usb_sceusbd_backend(void)

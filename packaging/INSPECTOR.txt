@@ -51,3 +51,11 @@ Notes
 The capture file uses the same hex format as --play, so it can be decoded
 directly. If the controller is in XInput mode it may not appear as HID; switch
 it to the mode you use on the PS4, or use --live for XInput.
+
+If no input reports arrive, the empty capture file is deleted and the tool says
+whether the interface was readable but silent. XInput/GIP pads are usually owned
+by their kernel driver; use the payload log on the console for those.
+
+--play cannot decode a Generic HID / D-Input capture, because the capture does
+not contain the report descriptor needed to rebuild its field map. The tool says
+so instead of guessing. Switch Pro 057E:2009 report 0x30 captures decode fully.

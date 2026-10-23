@@ -94,6 +94,14 @@ The log records the first few reports for the opened pad; the console prompt
 tells you when the capture is complete. It is enough to identify the report
 format, but for full button mapping the /dev/hidraw capture is better.
 
+If no input reports arrive, the empty capture file is deleted and the tool
+explains that some pads expose only a vendor/control interface on hidraw, while
+XInput/GIP pads are owned by their kernel driver.
+
+--play cannot decode a Generic HID / D-Input capture, because the capture does
+not contain the report descriptor needed to rebuild its field map. Switch Pro
+057E:2009 report 0x30 captures decode fully.
+
 Troubleshooting
 ---------------
 

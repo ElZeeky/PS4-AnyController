@@ -15,16 +15,33 @@
 
 /* subType 2 is the Remote Play pad, which is what a virtual device is. */
 #define XCP_KLOG_SUBTYPE_COLON "[subType:2]"
-#define XCP_KLOG_SUBTYPE_EQUALS "subType=2"
+#define XCP_KLOG_SUBTYPE_EQUALS "[subType=2]"
+/* type 1 is a controller; a headset arrives as type 2 / subType 10. */
+#define XCP_KLOG_TYPE_COLON "[type:1]"
+#define XCP_KLOG_TYPE_EQUALS "[type=1]"
 
 int xcp_klog_is_virtual_pad_added(const char *line)
 {
+    uint64_t id;
+
     if (!line) return 0;
     if (!strstr(line, XCP_KLOG_EVENT)) return 0;
 
-    if (strstr(line, XCP_KLOG_SUBTYPE_COLON)) return 1;
-    if (strstr(line, XCP_KLOG_SUBTYPE_EQUALS)) return 1;
-    return 0;
+    if (!strstr(line, XCP_KLOG_SUBTYPE_COLON) &&
+        !strstr(line, XCP_KLOG_SUBTYPE_EQUALS)) return 0;
+    if (!strstr(line, XCP_KLOG_TYPE_COLON) &&
+        !strstr(line, XCP_KLOG_TYPE_EQUALS)) return 0;
+
+    /*
+     * A pad on the console's own ports re-registers with a DeviceId whose low
+     * byte is zero (0x30300, 0x90300). Its event can arrive while we are
+     * waiting, and it also has type 1 / subType 2, so the low byte is the
+     * cheap discriminator AnyPad uses. Virtual ids seen here are 0x5030D and
+     * 0x7030D; a zero low byte is never ours.
+     */
+    id = xcp_klog_device_id(line);
+    if (!id || (id & 0xFFu) == 0) return 0;
+    return 1;
 }
 
 /*

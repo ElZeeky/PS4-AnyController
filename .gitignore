@@ -29,8 +29,9 @@
 # PC artifacts
 *.exe
 
-# Sony library dumps (copyrighted - never publish these)
-/DUMPLOGS/*.bin
+# Local diagnostics: console logs, captures and Sony library dumps.
+# Never commit or package this directory.
+/DUMPLOGS/
 
 # Generated installation package (binaries go to GitHub Releases, not the repo)
 /release/

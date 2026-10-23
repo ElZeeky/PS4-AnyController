@@ -171,6 +171,7 @@ static xcp_usb_backend g_mock = {
     mock_start,
     mock_read,
     mock_close,
+    NULL,
 };
 
 xcp_usb_backend *xcp_usb_mock_backend(void)

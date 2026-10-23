@@ -160,6 +160,8 @@ cmd_package() {
   local cli="$BUILD/AnyController-Inspector"
   local lin="$BUILD/AnyController-Inspector-linux-x86_64"
   local tool_doc="$ROOT/packaging/INSPECTOR.txt"
+  local compat="$ROOT/docs/COMPATIBILITY.md"
+  local report="$ROOT/RELEASE-REPORT.md"
   local cli_name="AnyController-Inspector"
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*) cli_name="AnyController-Inspector.exe" ;;
@@ -173,6 +175,8 @@ cmd_package() {
   [ -f "$ROOT/packaging/setup-linux.sh" ] || die "packaging/setup-linux.sh missing"
   [ -f "$ROOT/packaging/run-linux.sh" ] || die "packaging/run-linux.sh missing"
   [ -f "$tool_doc" ] || die "packaging/INSPECTOR.txt (or PC-TOOL.txt) missing"
+  [ -f "$compat" ] || die "docs/COMPATIBILITY.md missing"
+  [ -f "$report" ] || die "RELEASE-REPORT.md missing"
 
   if [ ! -f "$dumper" ]; then
     say "dumper not built yet; building it"
@@ -206,6 +210,8 @@ cmd_package() {
   cp "$ROOT/packaging/DUMPER.txt"  "$ROOT/release/DUMPER.txt"
   cp "$tool_doc"                   "$ROOT/release/$(basename "$tool_doc")"
   cp "$ROOT/packaging/INSPECTOR-LINUX.txt" "$ROOT/release/INSPECTOR-LINUX.txt"
+  cp "$compat"                     "$ROOT/release/COMPATIBILITY.md"
+  cp "$report"                     "$ROOT/release/RELEASE-REPORT.md"
   # Keep the Linux helpers LF-only even from a CRLF checkout.
   tr -d '\r' < "$ROOT/packaging/setup-linux.sh" > "$ROOT/release/setup-linux.sh"
   tr -d '\r' < "$ROOT/packaging/run-linux.sh" > "$ROOT/release/run-linux.sh"

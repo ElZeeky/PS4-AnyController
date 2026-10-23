@@ -31,14 +31,23 @@ void xcp_config_default(xcp_config *cfg)
     cfg->invert_right_y    = 1;
     cfg->swap_ab           = 0;
     cfg->swap_xy           = 0;
+    cfg->manba_post_switch_layout = 0;
 }
 
 void xcp_config_default_switch(xcp_config *cfg)
 {
     if (!cfg) return;
     xcp_config_default(cfg);
-    cfg->invert_left_y  = 0; /* Switch sticks already match PS4 axis direction */
+    cfg->invert_left_y  = 0; /* Switch PDP sticks match PS4 axis direction */
     cfg->invert_right_y = 0;
+}
+
+void xcp_config_default_switch_pro(xcp_config *cfg)
+{
+    if (!cfg) return;
+    xcp_config_default_switch(cfg);
+    cfg->invert_left_y  = 1; /* 0x30 reports Y opposite to PS4, confirmed */
+    cfg->invert_right_y = 1;
 }
 
 void xcp_config_default_dualsense(xcp_config *cfg)
@@ -47,6 +56,32 @@ void xcp_config_default_dualsense(xcp_config *cfg)
     xcp_config_default(cfg);
     cfg->invert_left_y  = 0; /* DualSense sticks already match PS4 axes */
     cfg->invert_right_y = 0;
+}
+
+void xcp_config_for_source(xcp_controller_type type,
+                           xcp_controller_type previous,
+                           xcp_config *cfg)
+{
+    if (!cfg) return;
+
+    switch (type) {
+    case XCP_CTRL_SWITCH:     xcp_config_default_switch(cfg);     break;
+    case XCP_CTRL_SWITCH_PRO: xcp_config_default_switch_pro(cfg); break;
+    case XCP_CTRL_DUALSENSE:  xcp_config_default_dualsense(cfg);  break;
+    default:                  xcp_config_default(cfg);            break;
+    }
+
+    /*
+     * The Manba One V2 in wired PC mode reports a rotated face layout if it was
+     * in Switch mode just before. Power-cycling the pad restores the normal
+     * layout, so this is pad state, not a different USB profile. We cannot ask
+     * the pad which state it is in; the only safe signal is the transition.
+     * A plain PC reconnect (previous == XBOX360) must stay on the normal map.
+     */
+    if (type == XCP_CTRL_XBOX360 &&
+        (previous == XCP_CTRL_SWITCH || previous == XCP_CTRL_SWITCH_PRO)) {
+        cfg->manba_post_switch_layout = 1;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -166,6 +201,9 @@ int xcp_report_looks_valid(xcp_controller_type type, const uint8_t *buf, size_t 
                buf[0] == XCP_XBOXONE_REPORT_INPUT;
     case XCP_CTRL_SWITCH:
         return len >= XCP_SWITCH_REPORT_SIZE;
+    case XCP_CTRL_SWITCH_PRO:
+        return len >= XCP_SWITCH_PRO_MIN_SIZE &&
+               buf[0] == XCP_SWITCH_PRO_REPORT_ID;
     case XCP_CTRL_DUALSENSE:
         return len >= XCP_DUALSENSE_MIN_SIZE &&
                buf[0] == XCP_DUALSENSE_REPORT_ID;
@@ -196,19 +234,30 @@ static void decode_xbox360(const xcp_xbox360_report *r, const xcp_config *cfg,
     out->right_trigger = r->right_trigger;
 
     /* Face buttons (optional A/B and X/Y swap). */
-    if (cfg->swap_ab) {
-        if (buttons & (XCP_360_A << 8)) mask |= XCP_BTN_CIRCLE;
+    if (cfg->manba_post_switch_layout) {
+        /*
+         * Pad still in its post-Switch state: physical A/B/Y arrive on the
+         * B/Y/A bits. Map the raw bits back to a standard PS4 diamond.
+         */
+        if (buttons & (XCP_360_A << 8)) mask |= XCP_BTN_TRIANGLE;
         if (buttons & (XCP_360_B << 8)) mask |= XCP_BTN_CROSS;
-    } else {
-        if (buttons & (XCP_360_A << 8)) mask |= XCP_BTN_CROSS;
-        if (buttons & (XCP_360_B << 8)) mask |= XCP_BTN_CIRCLE;
-    }
-    if (cfg->swap_xy) {
-        if (buttons & (XCP_360_X << 8)) mask |= XCP_BTN_TRIANGLE;
-        if (buttons & (XCP_360_Y << 8)) mask |= XCP_BTN_SQUARE;
-    } else {
         if (buttons & (XCP_360_X << 8)) mask |= XCP_BTN_SQUARE;
-        if (buttons & (XCP_360_Y << 8)) mask |= XCP_BTN_TRIANGLE;
+        if (buttons & (XCP_360_Y << 8)) mask |= XCP_BTN_CIRCLE;
+    } else {
+        if (cfg->swap_ab) {
+            if (buttons & (XCP_360_A << 8)) mask |= XCP_BTN_CIRCLE;
+            if (buttons & (XCP_360_B << 8)) mask |= XCP_BTN_CROSS;
+        } else {
+            if (buttons & (XCP_360_A << 8)) mask |= XCP_BTN_CROSS;
+            if (buttons & (XCP_360_B << 8)) mask |= XCP_BTN_CIRCLE;
+        }
+        if (cfg->swap_xy) {
+            if (buttons & (XCP_360_X << 8)) mask |= XCP_BTN_TRIANGLE;
+            if (buttons & (XCP_360_Y << 8)) mask |= XCP_BTN_SQUARE;
+        } else {
+            if (buttons & (XCP_360_X << 8)) mask |= XCP_BTN_SQUARE;
+            if (buttons & (XCP_360_Y << 8)) mask |= XCP_BTN_TRIANGLE;
+        }
     }
 
     /* Shoulders. */
@@ -374,6 +423,68 @@ static void decode_switch(const xcp_switch_report *r, const xcp_config *cfg,
     out->connected = 1;
 }
 
+static void decode_switch_pro(const xcp_switch_pro_report *r,
+                              const xcp_config *cfg, xcp_pad_state *out)
+{
+    uint32_t mask = 0;
+    uint16_t lx, ly, rx, ry;
+
+    lx = (uint16_t)(r->left_x_lo |
+                    ((uint16_t)(r->left_xy_hi & 0x0Fu) << 8));
+    ly = (uint16_t)((r->left_xy_hi >> 4) |
+                    ((uint16_t)r->left_y_hi << 4));
+    rx = (uint16_t)(r->right_x_lo |
+                    ((uint16_t)(r->right_xy_hi & 0x0Fu) << 8));
+    ry = (uint16_t)((r->right_xy_hi >> 4) |
+                    ((uint16_t)r->right_y_hi << 4));
+
+    out->left_x  = (uint8_t)(lx >> 4);
+    out->left_y  = (uint8_t)(ly >> 4);
+    out->right_x = (uint8_t)(rx >> 4);
+    out->right_y = (uint8_t)(ry >> 4);
+
+    apply_stick(cfg, &out->left_x,  &out->left_y,  cfg->invert_left_y);
+    apply_stick(cfg, &out->right_x, &out->right_y, cfg->invert_right_y);
+
+    out->left_trigger  = (r->buttons_left & XCP_SWPRO_ZL) ? 255u : 0u;
+    out->right_trigger = (r->buttons_right & XCP_SWPRO_ZR) ? 255u : 0u;
+
+    if (cfg->swap_ab) {
+        if (r->buttons_right & XCP_SWPRO_A) mask |= XCP_BTN_CROSS;
+        if (r->buttons_right & XCP_SWPRO_B) mask |= XCP_BTN_CIRCLE;
+    } else {
+        if (r->buttons_right & XCP_SWPRO_A) mask |= XCP_BTN_CIRCLE;
+        if (r->buttons_right & XCP_SWPRO_B) mask |= XCP_BTN_CROSS;
+    }
+    if (cfg->swap_xy) {
+        if (r->buttons_right & XCP_SWPRO_X) mask |= XCP_BTN_SQUARE;
+        if (r->buttons_right & XCP_SWPRO_Y) mask |= XCP_BTN_TRIANGLE;
+    } else {
+        if (r->buttons_right & XCP_SWPRO_X) mask |= XCP_BTN_TRIANGLE;
+        if (r->buttons_right & XCP_SWPRO_Y) mask |= XCP_BTN_SQUARE;
+    }
+
+    if (r->buttons_left & XCP_SWPRO_L)  mask |= XCP_BTN_L1;
+    if (r->buttons_right & XCP_SWPRO_R) mask |= XCP_BTN_R1;
+    if (r->buttons_left & XCP_SWPRO_ZL) mask |= XCP_BTN_L2;
+    if (r->buttons_right & XCP_SWPRO_ZR) mask |= XCP_BTN_R2;
+
+    if (r->buttons_shared & XCP_SWPRO_L3)      mask |= XCP_BTN_L3;
+    if (r->buttons_shared & XCP_SWPRO_R3)      mask |= XCP_BTN_R3;
+    if (r->buttons_shared & XCP_SWPRO_PLUS)    mask |= XCP_BTN_OPTIONS;
+    if (r->buttons_shared & XCP_SWPRO_MINUS)   mask |= XCP_BTN_SHARE;
+    if (r->buttons_shared & XCP_SWPRO_CAPTURE) mask |= XCP_BTN_SHARE;
+    if (r->buttons_shared & XCP_SWPRO_HOME)    mask |= XCP_BTN_PS;
+
+    if (r->buttons_left & XCP_SWPRO_DOWN)  mask |= XCP_BTN_DOWN;
+    if (r->buttons_left & XCP_SWPRO_UP)    mask |= XCP_BTN_UP;
+    if (r->buttons_left & XCP_SWPRO_RIGHT) mask |= XCP_BTN_RIGHT;
+    if (r->buttons_left & XCP_SWPRO_LEFT)  mask |= XCP_BTN_LEFT;
+
+    out->buttons   = mask;
+    out->connected = 1;
+}
+
 /* ---------------------------------------------------------------------------
  * Sony DualSense / DualSense Edge
  * ------------------------------------------------------------------------ */
@@ -454,11 +565,7 @@ int xcp_decode(xcp_controller_type type,
     if (!xcp_report_looks_valid(type, buf, len)) return 0;
 
     if (!cfg) {
-        switch (type) {
-        case XCP_CTRL_SWITCH:    xcp_config_default_switch(&local);    break;
-        case XCP_CTRL_DUALSENSE: xcp_config_default_dualsense(&local); break;
-        default:                 xcp_config_default(&local);           break;
-        }
+        xcp_config_for_source(type, XCP_CTRL_NONE, &local);
         cfg = &local;
     }
 
@@ -492,6 +599,12 @@ int xcp_decode(xcp_controller_type type,
         xcp_switch_report r;
         memcpy(&r, buf, sizeof(r));
         decode_switch(&r, cfg, out);
+        return 1;
+    }
+    case XCP_CTRL_SWITCH_PRO: {
+        xcp_switch_pro_report r;
+        memcpy(&r, buf, sizeof(r));
+        decode_switch_pro(&r, cfg, out);
         return 1;
     }
     case XCP_CTRL_DUALSENSE: {

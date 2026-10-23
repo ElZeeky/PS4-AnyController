@@ -73,6 +73,24 @@ static size_t make_switch(uint8_t *buf, uint8_t b0, uint8_t b1, uint8_t hat,
     return XCP_SWITCH_REPORT_SIZE;
 }
 
+static size_t make_switch_pro(uint8_t *buf, uint8_t right, uint8_t shared,
+                              uint8_t left, uint16_t lx, uint16_t ly,
+                              uint16_t rx, uint16_t ry)
+{
+    memset(buf, 0, 64);
+    buf[0]  = XCP_SWITCH_PRO_REPORT_ID;
+    buf[3]  = right;
+    buf[4]  = shared;
+    buf[5]  = left;
+    buf[6]  = (uint8_t)(lx & 0xFF);
+    buf[7]  = (uint8_t)(((lx >> 8) & 0x0F) | ((ly & 0x0F) << 4));
+    buf[8]  = (uint8_t)(ly >> 4);
+    buf[9]  = (uint8_t)(rx & 0xFF);
+    buf[10] = (uint8_t)(((rx >> 8) & 0x0F) | ((ry & 0x0F) << 4));
+    buf[11] = (uint8_t)(ry >> 4);
+    return 64;
+}
+
 static size_t make_dualsense(uint8_t *buf,
                              uint8_t b0, uint8_t b1, uint8_t b2,
                              uint8_t lx, uint8_t ly, uint8_t rx, uint8_t ry,
@@ -376,6 +394,67 @@ XCP_TEST(xbox360_ab_swap_option)
     XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CIRCLE | XCP_BTN_TRIANGLE);
 }
 
+XCP_TEST(xbox360_post_switch_face_layout)
+{
+    uint8_t       buf[XCP_XBOX360_REPORT_SIZE];
+    xcp_pad_state s;
+    xcp_config    cfg;
+
+    xcp_config_default(&cfg);
+    cfg.manba_post_switch_layout = 1;
+
+    /* The pad is still in its post-Switch state: raw A/B/Y arrive rotated. */
+    make_360(buf, 0, XCP_360_A, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_TRIANGLE);
+
+    make_360(buf, 0, XCP_360_B, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CROSS);
+
+    make_360(buf, 0, XCP_360_X, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_SQUARE);
+
+    make_360(buf, 0, XCP_360_Y, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CIRCLE);
+}
+
+XCP_TEST(config_for_source_only_flags_switch_to_xbox_transition)
+{
+    xcp_config    cfg;
+    uint8_t       buf[XCP_XBOX360_REPORT_SIZE];
+    xcp_pad_state s;
+
+    xcp_config_for_source(XCP_CTRL_XBOX360, XCP_CTRL_SWITCH_PRO, &cfg);
+    XCP_CHECK_EQ_INT(cfg.manba_post_switch_layout, 1);
+
+    xcp_config_for_source(XCP_CTRL_XBOX360, XCP_CTRL_SWITCH, &cfg);
+    XCP_CHECK_EQ_INT(cfg.manba_post_switch_layout, 1);
+
+    xcp_config_for_source(XCP_CTRL_XBOX360, XCP_CTRL_XBOX360, &cfg);
+    XCP_CHECK_EQ_INT(cfg.manba_post_switch_layout, 0);
+
+    /* A plain PC reconnect keeps the normal face layout. */
+    make_360(buf, 0, XCP_360_A, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CROSS);
+
+    xcp_config_for_source(XCP_CTRL_XBOX360, XCP_CTRL_NONE, &cfg);
+    XCP_CHECK_EQ_INT(cfg.manba_post_switch_layout, 0);
+
+    /* Only the Switch -> Xbox transition rotates the face bits. */
+    xcp_config_for_source(XCP_CTRL_XBOX360, XCP_CTRL_SWITCH_PRO, &cfg);
+    make_360(buf, 0, XCP_360_A, 0, 0, 0, 0, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_XBOX360, buf, 20, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_TRIANGLE);
+
+    xcp_config_for_source(XCP_CTRL_SWITCH_PRO, XCP_CTRL_XBOX360, &cfg);
+    XCP_CHECK_EQ_INT(cfg.manba_post_switch_layout, 0);
+    XCP_CHECK_EQ_INT(cfg.invert_left_y, 1);
+}
+
 XCP_TEST(xbox360_deadzone_zero_keeps_raw_values)
 {
     uint8_t       buf[XCP_XBOX360_REPORT_SIZE];
@@ -606,6 +685,65 @@ XCP_TEST(dualsense_triggers_hat_and_sticks)
                      XCP_BTN_L2 | XCP_BTN_R2);
 }
 
+XCP_TEST(dualsense_all_hat_directions_and_trigger_release)
+{
+    static const uint8_t hats[8] = {
+        XCP_SWITCH_HAT_UP, XCP_SWITCH_HAT_UP_RIGHT, XCP_SWITCH_HAT_RIGHT,
+        XCP_SWITCH_HAT_DOWN_RIGHT, XCP_SWITCH_HAT_DOWN,
+        XCP_SWITCH_HAT_DOWN_LEFT, XCP_SWITCH_HAT_LEFT,
+        XCP_SWITCH_HAT_UP_LEFT,
+    };
+    static const uint32_t expected[8] = {
+        XCP_BTN_UP, XCP_BTN_UP | XCP_BTN_RIGHT, XCP_BTN_RIGHT,
+        XCP_BTN_DOWN | XCP_BTN_RIGHT, XCP_BTN_DOWN,
+        XCP_BTN_DOWN | XCP_BTN_LEFT, XCP_BTN_LEFT,
+        XCP_BTN_UP | XCP_BTN_LEFT,
+    };
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+    int           i;
+
+    for (i = 0; i < 8; i++) {
+        make_dualsense(buf, hats[i], 0, 0, 128, 128, 128, 128, 0, 0);
+        XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                    XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+        XCP_CHECK_EQ_HEX(s.buttons, expected[i]);
+    }
+
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                   128, 128, 128, 128, 255, 255);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_L2 | XCP_BTN_R2);
+
+    /* Both analog triggers back at zero: the digital bits must go away too. */
+    make_dualsense(buf, XCP_SWITCH_HAT_CENTERED, 0, 0,
+                   128, 128, 128, 128, 0, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, 0);
+    XCP_CHECK_EQ_INT(s.left_trigger, 0);
+    XCP_CHECK_EQ_INT(s.right_trigger, 0);
+}
+
+XCP_TEST(dualsense_edge_extras_are_not_mapped)
+{
+    uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
+    xcp_pad_state s;
+
+    make_dualsense(buf,
+                   XCP_SWITCH_HAT_CENTERED | XCP_DS_CROSS,
+                   0,
+                   XCP_DS_MUTE | XCP_DS_EDGE_FN_L | XCP_DS_EDGE_FN_R |
+                       XCP_DS_EDGE_PADDLE_L | XCP_DS_EDGE_PADDLE_R,
+                   128, 128, 128, 128, 0, 0);
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_DUALSENSE, buf,
+                                XCP_DUALSENSE_REPORT_SIZE, NULL, &s), 1);
+    /* Mute and the Edge's Fn/paddles have no DS4 equivalent and stay off. */
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CROSS);
+}
+
 XCP_TEST(dualsense_report_skips_rubbish)
 {
     uint8_t       buf[XCP_DUALSENSE_REPORT_SIZE];
@@ -658,6 +796,150 @@ XCP_TEST(switch_zl_zr_are_digital)
     XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_L2 | XCP_BTN_R2);
 }
 
+XCP_TEST(switch_pro_full_report)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+    size_t        len = make_switch_pro(buf,
+                                        XCP_SWPRO_A | XCP_SWPRO_R |
+                                        XCP_SWPRO_ZR,
+                                        XCP_SWPRO_PLUS | XCP_SWPRO_MINUS |
+                                        XCP_SWPRO_L3 | XCP_SWPRO_R3 |
+                                        XCP_SWPRO_HOME | XCP_SWPRO_CAPTURE,
+                                        XCP_SWPRO_UP | XCP_SWPRO_LEFT |
+                                        XCP_SWPRO_L | XCP_SWPRO_ZL,
+                                        2048, 2048, 2048, 2048);
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, len, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons,
+                     XCP_BTN_CIRCLE | XCP_BTN_L1 | XCP_BTN_R1 |
+                     XCP_BTN_R2 | XCP_BTN_OPTIONS | XCP_BTN_SHARE |
+                     XCP_BTN_L3 | XCP_BTN_R3 | XCP_BTN_PS | XCP_BTN_UP |
+                     XCP_BTN_LEFT | XCP_BTN_L2);
+    XCP_CHECK_EQ_INT(s.left_x, 128);
+    XCP_CHECK_EQ_INT(s.left_y, 128);
+    XCP_CHECK_EQ_INT(s.right_x, 128);
+    XCP_CHECK_EQ_INT(s.right_y, 128);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.right_trigger, 255);
+}
+
+XCP_TEST(switch_pro_12bit_sticks)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+    xcp_config    cfg;
+
+    xcp_config_default_switch_pro(&cfg);
+    cfg.stick_deadzone = 0;
+    make_switch_pro(buf, 0, 0, 0, 0, 4095, 1024, 3072);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, &cfg, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_x, 0);
+    XCP_CHECK_EQ_INT(s.left_y, 0);
+    XCP_CHECK_EQ_INT(s.right_x, 64);
+    XCP_CHECK_EQ_INT(s.right_y, 63);
+}
+
+XCP_TEST(switch_pro_default_config_inverts_y)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+    xcp_config    cfg;
+
+    xcp_config_default_switch_pro(&cfg);
+    cfg.stick_deadzone = 0;
+    make_switch_pro(buf, 0, 0, 0, 1024, 0, 3072, 4095);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, &cfg, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_x, 64);
+    XCP_CHECK_EQ_INT(s.left_y, 255);
+    XCP_CHECK_EQ_INT(s.right_x, 192);
+    XCP_CHECK_EQ_INT(s.right_y, 0);
+}
+
+XCP_TEST(switch_pro_49_byte_report)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+
+    make_switch_pro(buf,
+                    XCP_SWPRO_Y | XCP_SWPRO_B | XCP_SWPRO_A | XCP_SWPRO_X |
+                    XCP_SWPRO_R | XCP_SWPRO_ZR,
+                    XCP_SWPRO_MINUS | XCP_SWPRO_PLUS |
+                    XCP_SWPRO_L3 | XCP_SWPRO_R3 |
+                    XCP_SWPRO_HOME | XCP_SWPRO_CAPTURE,
+                    XCP_SWPRO_LEFT | XCP_SWPRO_L | XCP_SWPRO_ZL,
+                    2048, 2048, 2048, 2048);
+
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, buf, 49));
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, buf, 64));
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 49, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons,
+                     XCP_BTN_SQUARE | XCP_BTN_CROSS | XCP_BTN_CIRCLE |
+                     XCP_BTN_TRIANGLE | XCP_BTN_R1 | XCP_BTN_R2 |
+                     XCP_BTN_SHARE | XCP_BTN_OPTIONS | XCP_BTN_L3 |
+                     XCP_BTN_R3 | XCP_BTN_PS | XCP_BTN_LEFT |
+                     XCP_BTN_L1 | XCP_BTN_L2);
+    XCP_CHECK_EQ_INT(s.left_x, 128);
+    XCP_CHECK_EQ_INT(s.left_y, 128);
+    XCP_CHECK_EQ_INT(s.right_x, 128);
+    XCP_CHECK_EQ_INT(s.right_y, 128);
+}
+
+XCP_TEST(switch_pro_y_axis_orientation)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+    xcp_config    cfg;
+
+    xcp_config_default_switch_pro(&cfg);
+    cfg.stick_deadzone = 0;
+
+    /* Raw 0 is the top of the stick; after inversion it is PS4 "up" (255). */
+    make_switch_pro(buf, 0, 0, 0, 2048, 0, 2048, 4095);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, &cfg, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_y, 255);
+    XCP_CHECK_EQ_INT(s.right_y, 0);
+
+    make_switch_pro(buf, 0, 0, 0, 2048, 4095, 2048, 0);
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, &cfg, &s), 1);
+    XCP_CHECK_EQ_INT(s.left_y, 0);
+    XCP_CHECK_EQ_INT(s.right_y, 255);
+}
+
+XCP_TEST(switch_pdp_full_report)
+{
+    uint8_t       buf[7];
+    xcp_pad_state s;
+    xcp_config    cfg;
+    size_t        len = make_switch(buf,
+                                    XCP_SWITCH_Y | XCP_SWITCH_B |
+                                    XCP_SWITCH_A | XCP_SWITCH_X |
+                                    XCP_SWITCH_L | XCP_SWITCH_R |
+                                    XCP_SWITCH_ZL | XCP_SWITCH_ZR,
+                                    XCP_SWITCH_MINUS | XCP_SWITCH_PLUS |
+                                    XCP_SWITCH_L3 | XCP_SWITCH_R3 |
+                                    XCP_SWITCH_HOME,
+                                    XCP_SWITCH_HAT_DOWN_LEFT,
+                                    0, 255, 255, 0);
+
+    xcp_config_default_switch(&cfg);
+    cfg.stick_deadzone = 0;
+
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH, buf, len, &cfg, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons,
+                     XCP_BTN_SQUARE | XCP_BTN_CROSS | XCP_BTN_CIRCLE |
+                     XCP_BTN_TRIANGLE | XCP_BTN_L1 | XCP_BTN_R1 |
+                     XCP_BTN_L2 | XCP_BTN_R2 | XCP_BTN_SHARE |
+                     XCP_BTN_OPTIONS | XCP_BTN_L3 | XCP_BTN_R3 |
+                     XCP_BTN_PS | XCP_BTN_DOWN | XCP_BTN_LEFT);
+    XCP_CHECK_EQ_INT(s.left_x, 0);
+    XCP_CHECK_EQ_INT(s.left_y, 255); /* Switch PDP is not Y-inverted */
+    XCP_CHECK_EQ_INT(s.right_x, 255);
+    XCP_CHECK_EQ_INT(s.right_y, 0);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.right_trigger, 255);
+}
+
 /* ---------------------------------------------------------------------------
  * Report validity helper
  * ------------------------------------------------------------------------ */
@@ -684,6 +966,13 @@ XCP_TEST(report_looks_valid)
                                            XCP_DUALSENSE_MIN_SIZE - 1));
 
     XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH, b, 7));
+    b[0] = XCP_SWITCH_PRO_REPORT_ID;
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, b,
+                                     XCP_SWITCH_PRO_MIN_SIZE));
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, b, 49));
+    XCP_CHECK(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, b, 64));
+    XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, b,
+                                           XCP_SWITCH_PRO_MIN_SIZE - 1));
     XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_NONE, b, 7));
     XCP_CHECK_FALSE(xcp_report_looks_valid(XCP_CTRL_XBOX360, NULL, 20));
 }
@@ -705,6 +994,8 @@ XCP_TEST(controller_type_for_ids)
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x054C, 0x0DF2),
                      XCP_CTRL_DUALSENSE);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x0E6F, 0x0187), XCP_CTRL_SWITCH);
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x057E, 0x2009),
+                     XCP_CTRL_SWITCH_PRO);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x0E6F, 0x9999), XCP_CTRL_NONE);
     XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x054C, 0x09CC), XCP_CTRL_NONE);
 
@@ -733,6 +1024,8 @@ void xcp_register_translate_tests(void)
     XCP_RUN(xbox360_stick_extremes_and_y_inversion);
     XCP_RUN(xbox360_y_inversion_can_be_disabled);
     XCP_RUN(xbox360_ab_swap_option);
+    XCP_RUN(xbox360_post_switch_face_layout);
+    XCP_RUN(config_for_source_only_flags_switch_to_xbox_transition);
     XCP_RUN(xbox360_deadzone_zero_keeps_raw_values);
 
     XCP_RUN(xboxone_centred_report);
@@ -746,10 +1039,18 @@ void xcp_register_translate_tests(void)
     XCP_RUN(dualsense_centred_report);
     XCP_RUN(dualsense_face_buttons_shoulders_and_menu);
     XCP_RUN(dualsense_triggers_hat_and_sticks);
+    XCP_RUN(dualsense_all_hat_directions_and_trigger_release);
+    XCP_RUN(dualsense_edge_extras_are_not_mapped);
     XCP_RUN(dualsense_report_skips_rubbish);
 
     XCP_RUN(switch_positional_face_buttons_and_hat);
     XCP_RUN(switch_zl_zr_are_digital);
+    XCP_RUN(switch_pro_full_report);
+    XCP_RUN(switch_pro_49_byte_report);
+    XCP_RUN(switch_pro_12bit_sticks);
+    XCP_RUN(switch_pro_default_config_inverts_y);
+    XCP_RUN(switch_pro_y_axis_orientation);
+    XCP_RUN(switch_pdp_full_report);
 
     XCP_RUN(report_looks_valid);
     XCP_RUN(controller_type_for_ids);

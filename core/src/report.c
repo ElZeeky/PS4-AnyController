@@ -15,7 +15,9 @@ const char *xcp_controller_type_name(xcp_controller_type type)
     case XCP_CTRL_XBOXONE:     return "Xbox One";
     case XCP_CTRL_XBOX_SERIES: return "Xbox Series";
     case XCP_CTRL_SWITCH:      return "Switch (PDP)";
+    case XCP_CTRL_SWITCH_PRO:  return "Switch Pro";
     case XCP_CTRL_DUALSENSE:   return "DualSense";
+    case XCP_CTRL_HID_GENERIC: return "Generic HID";
     case XCP_CTRL_NONE:
     default:                   return "none";
     }
@@ -96,6 +98,68 @@ xcp_controller_type xcp_controller_type_for_ids(uint16_t vid, uint16_t pid)
 
     if (vid == XCP_VID_PDP && xcp_is_pdp_switch_pid(pid)) {
         return XCP_CTRL_SWITCH;
+    }
+
+    if (vid == XCP_VID_NINTENDO && pid == XCP_PID_SWITCH_PRO) {
+        return XCP_CTRL_SWITCH_PRO;
+    }
+
+    return XCP_CTRL_NONE;
+}
+
+static int microsoft_pid_is_known(uint16_t pid)
+{
+    return pid == XCP_PID_XBOX360 || pid == XCP_PID_360_WLESS ||
+           xcp_is_xboxone_pid(pid);
+}
+
+xcp_controller_type xcp_controller_type_for_interface(uint16_t vid, uint16_t pid,
+                                                      uint8_t iface_class,
+                                                      uint8_t iface_subclass,
+                                                      uint8_t iface_protocol,
+                                                      int has_interrupt_in)
+{
+    xcp_controller_type by_id = xcp_controller_type_for_ids(vid, pid);
+
+    /*
+     * Sony's pads are the console's, except the DualSense we already know.
+     * Do not turn a DualShock 4 into a Generic HID device just because it is
+     * class 03 and we have no profile for it.
+     */
+    if (vid == XCP_VID_SONY) return by_id;
+
+    /*
+     * A known vendor/id pair always wins. For Microsoft, an uncatalogued pid
+     * is only assumed to be GIP when the interface actually looks like GIP
+     * (or when we have no descriptor information at all, which keeps the old
+     * id-only behaviour for callers that cannot read one).
+     */
+    if (by_id != XCP_CTRL_NONE) {
+        if (vid != XCP_VID_MICROSOFT || microsoft_pid_is_known(pid) ||
+            iface_class == 0) {
+            return by_id;
+        }
+    }
+
+    if (!has_interrupt_in) return XCP_CTRL_NONE;
+
+    if (iface_class == 0xFFu) {
+        if (iface_subclass == 0x5Du && iface_protocol == 0x01u) {
+            return XCP_CTRL_XBOX360;
+        }
+        if (iface_subclass == 0x47u && iface_protocol == 0xD0u) {
+            return XCP_CTRL_XBOXONE;
+        }
+        return XCP_CTRL_NONE;
+    }
+
+    /*
+     * Boot subclasses are keyboards (1) and mice (2). A HID gamepad normally
+     * uses subclass/protocol 0. It is still only a candidate until its report
+     * descriptor says it really has gamepad controls.
+     */
+    if (iface_class == 0x03u && iface_subclass == 0 && iface_protocol == 0) {
+        return XCP_CTRL_HID_GENERIC;
     }
 
     return XCP_CTRL_NONE;

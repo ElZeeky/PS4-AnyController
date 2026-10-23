@@ -48,6 +48,7 @@ void xcp_register_pad_state_tests(void);
 void xcp_register_usb_mock_tests(void);
 void xcp_register_router_tests(void);
 void xcp_register_klog_line_tests(void);
+void xcp_register_hid_generic_tests(void);
 
 int main(void)
 {
@@ -63,6 +64,8 @@ int main(void)
     xcp_register_router_tests();
     printf("\n[klog_line]\n");
     xcp_register_klog_line_tests();
+    printf("\n[hid_generic]\n");
+    xcp_register_hid_generic_tests();
 
     printf("\n\033[1m== %d tests, %d checks, %d failed\033[0m\n",
            g_tests_run, g_checks_run, g_checks_failed);

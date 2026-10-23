@@ -23,13 +23,23 @@
  * care should keep their previous state.
  *
  * `type` must not be XCP_CTRL_NONE. `cfg` may be NULL, meaning: defaults for
- * the controller family (xcp_config_default for Xbox, ..._switch for Switch,
- * ..._dualsense for DualSense).
+ * the controller family (xcp_config_default for Xbox, ..._switch for Switch
+ * PDP, ..._switch_pro for Switch Pro, ..._dualsense for DualSense).
  */
 int xcp_decode(xcp_controller_type type,
                const uint8_t *buf, size_t len,
                const xcp_config *cfg,
                xcp_pad_state *out);
+
+/*
+ * Build the config for a freshly opened source. `previous` is the type of the
+ * source that was open before it, or XCP_CTRL_NONE on the first connection.
+ * This is where device-specific transition quirks live; keep them out of the
+ * decoders' defaults.
+ */
+void xcp_config_for_source(xcp_controller_type type,
+                           xcp_controller_type previous,
+                           xcp_config *cfg);
 
 /*
  * Is `buf` plausibly a report belonging to `type`? Cheaper than a full decode

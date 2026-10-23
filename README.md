@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Payload binary: GPL-3.0](https://img.shields.io/badge/payload_binary-GPL--3.0-orange.svg)](NOTICE)
-[![Firmware: 11.00](https://img.shields.io/badge/firmware-11.00-informational.svg)](#requirements)
+[![Firmware: 11.00 confirmed](https://img.shields.io/badge/firmware-11.00_confirmed-informational.svg)](#requirements)
 [![Platform: PS4 · GoldHEN](https://img.shields.io/badge/platform-PS4_%7C_GoldHEN-003791.svg)](#requirements)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/4TtyCpdgFq)
 
@@ -11,7 +11,9 @@ home, settings, sign-in and games. A real DualShock 4 can stay connected and usa
 
 It runs as a **GoldHEN payload** (`AnyController.elf`) and creates a **virtual DualShock 4**
 through Sony's own virtual-device API, so the system itself sees your controller
-everywhere, not just inside a game. Confirmed working on a real firmware 11.00 console.
+everywhere, not just inside a game. Confirmed working on a real firmware 11.00 console;
+the current build also creates the pad through the direct API, without the older callsite
+patch, on 11.00. Firmware 13.52 is still waiting for console testers.
 
 > Based on [crucifix86/xbox_controller_plugin](https://github.com/crucifix86/xbox_controller_plugin)
 > (MIT). That project gives the pad player **2**; this is about player **1**. See [NOTICE](NOTICE).
@@ -28,20 +30,53 @@ everywhere, not just inside a game. Confirmed working on a real firmware 11.00 c
   "Who's using this controller?" prompt decides the profile.
 - **Safe by design** — it only ever reports what the controller sends; if `sceUsbd` or the
   virtual-device API is unavailable it says so and stops, touching nothing.
-- **No permanence** — the firmware-specific patch lives only in the payload process's RAM;
-  nothing is written outside `/data/`.
-- **Testable off-console** — a PC inspector exercises the same decoder (72 tests / 379 checks).
+- **No permanence** — the optional firmware-specific patch lives only in the payload
+  process's RAM; nothing is written outside `/data/`.
+- **Unknown HID gamepads too** — if the report descriptor declares buttons, sticks and a
+  hat, the fallback decodes it by field offsets; no clone-specific table is needed.
+- **Testable off-console** — a PC inspector exercises the same decoder (98 tests / 592 checks).
 
 ---
 
 ## Requirements
 
-- A PS4 on firmware **11.00** with **GoldHEN v2.4b18.10 or later**.
+- A PS4 on firmware **11.00** (confirmed, including the direct API path) or a newer
+  firmware (direct API path, awaiting console testers), with **GoldHEN v2.4b18.10 or
+  later**.
 - A **wired controller**. The decoder understands the Xbox 360, Xbox One/Series,
-  DualSense/DualSense Edge and Switch controller report layouts, including clones that use
-  them.
+  DualSense/DualSense Edge, Switch PDP and Switch Pro (`057E:2009`, report `0x30`) layouts,
+  including clones that use them. Unknown HID gamepads are also tried from their report
+  descriptor when the interface exposes a standard gamepad collection. Decoding a layout is
+  not the same as a confirmed console run; see [Compatibility](#compatibility).
+- On the **Manba One V2**, going from Switch mode back to wired PC leaves its face bits
+  rotated until the pad is power-cycled; the payload compensates for that one transition.
+  A clean PC connection, or a different Xbox 360 pad, keeps the normal layout.
 - A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional afterwards.
 - A way to copy one file over FTP (e.g. FileZilla).
+
+---
+
+## Compatibility
+
+Only the rows marked **confirmed** have been observed driving the PS4. Everything else is
+either partial, unsupported, or waiting for the indicated hardware run. PC decoder tests are
+not promoted to console confirmation.
+
+The full per-result table - firmware, GoldHEN, controller mode, connection and evidence - is
+in [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md). Summary:
+
+- **Confirmed working:** Manba One V2, Xbox 360 mode, 2.4 GHz receiver, PS4 11.00,
+  GoldHEN v2.4b18.10+ (exact build not logged).
+- **Partially working:** Manba One V2, Switch Pro mode, same console; pad created and fed but
+  physical face-button labels are still unconfirmed.
+- **Unsupported:** DualSense/Edge output features (adaptive triggers, haptics, LEDs, mic,
+  battery, touchpad coordinates); DS4-mode pads are left to the console's native driver.
+- **Untested:** DualSense and Edge basic input, Xbox One/Series GIP, 8BitDo, GameSir T4/
+  "GameSir 2", Generic HID/Logitech F310, Machenike G1 and firmware 13.52.
+
+Two tool limitations, not controller support claims: Linux `hidraw` does not expose Xbox
+XInput/GIP input, so use the payload log there; and `--play` cannot replay a Generic HID
+capture because the capture does not carry the report descriptor needed to rebuild its map.
 
 ---
 
@@ -66,6 +101,33 @@ Full walkthrough: [`docs/DEPLOY-PS4-PAYLOAD.md`](docs/DEPLOY-PS4-PAYLOAD.md).
 - **Stopping it** — the payload has no in-console stop; **reboot** to stop it for good.
   Turning the controller off removes the virtual pad but leaves the payload running.
 
+### DualSense and DualSense Edge
+
+The wired standard DualSense (`054C:0CE6`) and DualSense Edge (`054C:0DF2`) use USB
+input report `0x01` (64 bytes). Basic input is **implemented and PC-tested, but not yet
+confirmed on a console**: both sticks, both analog triggers, face buttons, shoulders,
+D-pad, L3/R3, PS, Create/Options and the touchpad click. Edge pads use the same basic
+profile; the Edge's Fn and paddle bits are left unmapped unless you remap them to
+standard buttons in the controller's own profile. The physical touchpad click passes
+through as a held button.
+
+Not supported: adaptive-trigger effects, haptics, lightbar/player LEDs, mic mute,
+battery state and touchpad coordinates. The virtual pad API used here is input-only
+(`OPEN-13`), so there is no path for game output to reach the physical controller.
+DualSense basic input still needs one real 9.60/console validation run; the exact
+capture sweep is in `PROGRESS.md` section 5l.
+
+### Third-party controllers
+
+The payload uses existing wire formats rather than guessed ids: Xbox 360
+(`FF/5D/01`), Xbox One/Series GIP (`FF/47/D0`), Switch Pro (`057E:2009`) and
+descriptor-gated Generic HID for D-Input pads. 8BitDo pads are expected to work through
+their Xbox, Switch or D-Input modes, but that is a class/id expectation, not a console
+confirmation. A GameSir T4 Cyclone Pro in Xbox mode should use Xbox 360 or GIP if it
+exposes the standard interface; the exact "GameSir 2" model still needs to be
+identified. If a pad exposes a vendor-specific HID report instead, send an
+`AnyController-Inspector --capture` dump before a profile is added.
+
 ---
 
 ## How it works
@@ -75,10 +137,12 @@ GoldHEN payloads run inside an existing system process, where Sony's own virtual
 controller's reports over `sceUsbd` and feeds them into a **virtual DualShock 4**, so the
 system treats it exactly like a DS4 plugged in over USB.
 
-One firmware-specific wrinkle: on 11.00 `scePadVirtualDeviceAddDevice` returns an error code
-even though the device *is* created, so the payload applies a small in-memory patch to that
-one call (guarded, and only in its own process). The device is created **unassigned**, so the
-choice of user stays on the console.
+The current build first raises the payload's credentials and calls
+`scePadVirtualDeviceAddDevice` directly; AnyPad PS4 showed this works on 13.52 without a
+callsite patch, and this payload has now created and fed a pad the same way on 11.00. If
+the direct path does not produce a klog event on 11.00, the payload falls back to the
+guarded in-memory `libScePad` patch that was confirmed there. The device is created
+**unassigned**, so the choice of user stays on the console.
 
 The build products use the `xcp_` prefix. The full engineering log — what is verified versus
 assumed, and what is still open — is in [PROGRESS.md](PROGRESS.md).
@@ -92,7 +156,7 @@ Everything goes through `build.sh`. It finds a portable Zig automatically and fa
 
 ```bash
 scripts/fetch_vendor.sh      # clone the reference repos at pinned revisions
-./build.sh test              # run the 72 unit tests
+./build.sh test              # run the 98 unit tests
 ./build.sh cli               # build the PC inspector for this machine (host/)
 ./build.sh cli-linux         # cross-compile the static Linux inspector
 ./build.sh payload           # cross-compile the payload -> build/ps4/AnyController.elf
@@ -139,13 +203,20 @@ On Linux, use `build/AnyController-Inspector-linux-x86_64`, or the packaged
 `setup-linux.sh` / `run-linux.sh` pair. `setup-linux.sh` installs one udev rule so
 `/dev/hidraw*` is readable without sudo; `run-linux.sh` starts the tool from its own folder.
 Xbox 360/One/Series in XInput/GIP mode usually do not expose `/dev/hidraw`, so use the payload
-log `/data/AnyController.log` with `--play` for those.
+log `/data/AnyController.log` with `--play` for those. A Switch Pro / `057E:2009` capture is
+decoded from its full 64-byte `0x30` report; `samples/switch-pro-reports.txt` is a known-good
+playback fixture. A Generic HID/D-Input capture cannot be replayed by `--play`, because the
+capture does not carry the report descriptor needed to rebuild its field map; the tool says
+so explicitly instead of guessing. If a capture contains no input reports, it is removed and
+the tool reports whether the interface was readable but silent (including the XInput/GIP and
+Linux `hidraw` cases).
 
 `--live` is a real cross-check: Windows exposes the pad's semantic state through XInput,
 whose button mask is byte-identical to the Xbox 360 wire mask, so the tool packs it into a
 real report and runs it through the same decoder the console runs. See
 `samples/xbox360-reports.txt` for a worked example of the byte layout, and
-`samples/dualsense-reports.txt` / `samples/xbox-series-reports.txt` for the new ones.
+`samples/dualsense-reports.txt`, `samples/xbox-series-reports.txt` and
+`samples/switch-pro-reports.txt` for the newer profiles.
 Capture files carry their VID/PID in the header, so `--play` picks the right protocol
 even when two pads share the same report id or length.
 
@@ -166,7 +237,7 @@ issue; see [`packaging/DUMPER.txt`](packaging/DUMPER.txt).
 | `host/` | the PC-side tool (`pc_tool.c`, `hid_capture.c`, shipped as `AnyController-Inspector`) |
 | `ps4/` | the payload (`payload/`), Orbis glue (`src/`), `build_payload.sh`, the libScePad patch, plus the `hello/` and `dumper/` diagnostic payloads |
 | `packaging/` | `INSTALL.txt`, `DUMPER.txt`, `INSPECTOR.txt`, and the Linux inspector helpers used to assemble `release/` |
-| `tests/` | 72 tests, 379 checks, no test-framework dependency |
+| `tests/` | 98 tests, 592 checks, no test-framework dependency |
 | `samples/` | hex report dumps for `--play` |
 | `docs/` | deployment guides and `docs/logs/` (real console run logs) |
 

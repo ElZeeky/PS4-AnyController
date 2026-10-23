@@ -26,7 +26,7 @@ XCP_TEST(klog_accepts_the_virtual_pad_line)
 
 XCP_TEST(klog_accepts_the_equals_spelling)
 {
-    const char *line = "...SCE_MBUS_EVENT_DEVICE_ADDED[DeviceId:0x1ff][subType=2]";
+    const char *line = "...SCE_MBUS_EVENT_DEVICE_ADDED[DeviceId:0x1ff][type=1][subType=2]";
 
     XCP_CHECK(xcp_klog_is_virtual_pad_added(line));
     XCP_CHECK_EQ_INT((int)xcp_klog_device_id(line), 0x1ff);
@@ -43,6 +43,14 @@ XCP_TEST(klog_rejects_a_real_pad_being_plugged_in)
     /* Right event, no subType at all. */
     XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(
         "SCE_MBUS_EVENT_DEVICE_ADDED [DeviceId:0x1234][type:1]"));
+
+    /* A headset is type 2, even if it somehow claims subType 2. */
+    XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(
+        "SCE_MBUS_EVENT_DEVICE_ADDED [DeviceId:0x1234][type:2][subType:2]"));
+
+    /* A physical pad re-registering on its own port has a zero low byte. */
+    XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(
+        "SCE_MBUS_EVENT_DEVICE_ADDED [DeviceId:0x30300][type:1][subType:2]"));
 }
 
 XCP_TEST(klog_rejects_everything_else)
@@ -50,7 +58,7 @@ XCP_TEST(klog_rejects_everything_else)
     XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(NULL));
     XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(""));
     XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(
-        "SCE_MBUS_EVENT_DEVICE_REMOVED [DeviceId:0x7030d][subType:2]"));
+        "SCE_MBUS_EVENT_DEVICE_REMOVED [DeviceId:0x7030d][type:1][subType:2]"));
     /* Our own mirrored log line must never look like the event. */
     XCP_CHECK_FALSE(xcp_klog_is_virtual_pad_added(
         "xcp: waiting for SCE_MBUS_EVENT_DEVICE_ADDED subType:2"));

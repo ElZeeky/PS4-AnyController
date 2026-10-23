@@ -1,15 +1,19 @@
 INSTALL
 ==================================
 
-This makes any wired controller work as PLAYER 1 on a jailbroken PS4 running
-GoldHEN, in every screen: home, settings, sign-in and games. The decoder knows
-the Xbox 360, Xbox One/Series, DualSense/DualSense Edge and Switch PDP report
-layouts, including clones that use them. It does that by creating a virtual
-DualShock 4, so it is a GoldHEN *payload*.
+This lets a wired controller act as PLAYER 1 on a jailbroken PS4 running GoldHEN,
+in every screen: home, settings, sign-in and games. The decoder has layouts for
+the Xbox 360, Xbox One/Series, DualSense/DualSense Edge, Switch PDP and Switch Pro
+(057E:2009, report 0x30) formats, including clones that use them. It creates a
+virtual DualShock 4, so it is a GoldHEN *payload*.
+
+Only the configuration marked Confirmed below has been observed working on a
+console. A decoder layout is not a console confirmation.
 
 Files here:
 
     AnyController.elf     the payload (this is the one you need)
+    COMPATIBILITY.md    per-result evidence table
     INSTALL.txt         this file
 
 
@@ -17,10 +21,41 @@ What you need
 -------------
 
 * A PS4 on firmware 11.00 with GoldHEN v2.4b18.10 or newer already running.
+  Newer firmware uses a direct API path that still needs console testers; 11.00
+  also has the confirmed callsite-patch fallback.
 * A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional
   afterwards.
 * Your controller's USB receiver (or cable) in a PS4 USB port.
 * FileZilla (or any FTP client) to copy one file over.
+
+
+What works (evidence, not guesses)
+----------------------------------
+
+Confirmed:
+    Manba One V2, Xbox 360/XInput mode, 2.4 GHz USB receiver.
+    PS4 11.00, GoldHEN v2.4b18.10+ (exact build not logged).
+    Virtual pad created and fed; player 1 on home, menus and in games.
+
+Partial:
+    Manba One V2, Switch Pro mode (057E:2009, report 0x30), 2.4 GHz receiver.
+    PS4 11.00, same GoldHEN. Pad created and fed, Y-axis fixed, no output
+    errors; physical face-button labels are still unconfirmed.
+
+Unsupported:
+    DualSense/Edge adaptive triggers, haptics, LEDs, mic mute, battery state and
+    touchpad coordinates. The virtual pad is input-only, on every firmware.
+    DS4/DS4-mode pads are left to the console's native driver.
+
+Untested:
+    DualSense 054C:0CE6 and Edge 054C:0DF2 basic input (9.60 capture requested;
+    no console run), Xbox One/Series GIP including 13.52 (old log invalid),
+    8BitDo Xbox/Switch/D-Input, GameSir T4 Cyclone Pro and "GameSir 2",
+    Generic HID / Logitech F310, and Machenike G1 on 13.52. No GoldHEN run for
+    these configurations. Do not report them as working.
+
+Full table with firmware, GoldHEN, mode, connection and evidence:
+COMPATIBILITY.md.
 
 
 Step 1 - copy the payload
@@ -80,9 +115,11 @@ The payload writes a log to /data/AnyController.log on the console. Grab it over
 FTP and read it; the project's README has the full guide. The most common issues:
 
 * Nothing happens -> the file is not in /data/payloads/ or GoldHEN is too old.
-* "vda patch: ... not patching" -> the payload did not recognise this firmware,
-  so it refused to touch the system library. Update the project / report it.
+* "vda: no callsite patch for firmware ..." -> the direct path did not create a
+  device and this firmware has no known patch. Send the vda/AddDevice lines.
+* "vda patch: ... not patching" -> the FW 11.00 fallback did not recognise the
+  callsite, so it refused to touch the system library. Update / report it.
 * No "Who's using this controller?" prompt -> the receiver may not be a known
-  device; check the "usb:" lines in the log.
+  device; check the "usb:" lines and the AddDevice/klog lines in the log.
 
 Nothing here is permanent and nothing is written outside /data/.

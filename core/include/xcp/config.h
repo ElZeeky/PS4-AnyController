@@ -19,13 +19,24 @@ typedef struct xcp_config {
     uint8_t invert_right_y;
     uint8_t swap_ab;             /* Japanese/Nintendo style A<->B */
     uint8_t swap_xy;
+    /*
+     * Manba One quirk: after PC -> Switch -> PC the pad keeps reporting an
+     * Xbox 360 packet whose face bits are rotated (A->B, B->Y, Y->A). A power
+     * cycle fixes it. The payload can only detect the transition, so it enables
+     * this full face permutation for that one connection. Never set this for a
+     * clean PC session; it is not a global layout preference.
+     */
+    uint8_t manba_post_switch_layout;
 } xcp_config;
 
 /* Deadzone + Y inversion, matching the reference plugin. */
 void xcp_config_default(xcp_config *cfg);
 
-/* Same, but without Y inversion (the Switch pad already matches PS4 axes). */
+/* Same, but without Y inversion (the Switch PDP pad matches PS4 axes). */
 void xcp_config_default_switch(xcp_config *cfg);
+
+/* Switch Pro reports Y with the opposite sign to PS4; invert it. */
+void xcp_config_default_switch_pro(xcp_config *cfg);
 
 /* Same, but without Y inversion (DualSense axes already match PS4). */
 void xcp_config_default_dualsense(xcp_config *cfg);

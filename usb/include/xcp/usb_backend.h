@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "xcp/report.h"
+#include "xcp/hid_generic.h"
 
 /* Upper bound on a report we are willing to receive. */
 #define XCP_USB_MAX_REPORT 64
@@ -27,6 +28,11 @@ typedef struct xcp_usb_device_info {
     uint16_t            vid;
     uint16_t            pid;
     xcp_controller_type type;             /* XCP_CTRL_NONE if we can't drive it */
+    uint8_t             iface_class;      /* chosen controller interface        */
+    uint8_t             iface_subclass;
+    uint8_t             iface_protocol;
+    uint8_t             iface_number;
+    uint8_t             has_interrupt_in; /* 1 when the interface can be read   */
     char                path[XCP_USB_PATH_MAX]; /* opaque, backend specific      */
     char                name[XCP_USB_NAME_MAX]; /* human readable, may be empty  */
 } xcp_usb_device_info;
@@ -36,6 +42,14 @@ typedef struct xcp_usb_device_info {
 #define XCP_USB_NO_DATA     1   /* nothing pending right now, try again later */
 #define XCP_USB_DISCONNECT  (-2)
 #define XCP_USB_ERROR       (-1)
+
+/*
+ * Status values that mean "no report arrived inside the timeout", not
+ * "the device went away". The PS4 backend sees Orbis codes; the PC ones see
+ * libusb's -7. Keep the classification in one place so a backend cannot
+ * accidentally turn an idle pad into a reconnect loop.
+ */
+int xcp_usb_status_is_timeout(int32_t status);
 
 /*
  * A backend. Every entry point is optional except open/read/close; a missing
@@ -82,6 +96,12 @@ typedef struct xcp_usb_backend {
 
     /* Close a handle from open(). */
     void (*close)(void *ctx, void *handle);
+
+    /*
+     * Optional. For XCP_CTRL_HID_GENERIC, copy the report-descriptor layout
+     * the backend parsed when it opened the device. Returns 1 on success.
+     */
+    int  (*get_hid_map)(void *ctx, void *handle, xcp_hid_map *out);
 } xcp_usb_backend;
 
 /* --- Provided implementations -------------------------------------------- */
@@ -113,8 +133,9 @@ xcp_usb_backend *xcp_usb_sceusbd_backend(void);
 /* --- Shared helpers ------------------------------------------------------ */
 
 /*
- * First enumerated device whose type is not XCP_CTRL_NONE and (when
- * `wanted != XCP_CTRL_NONE`) whose type matches. Returns 1 and fills `out`.
+ * First enumerated device whose type is not XCP_CTRL_NONE. A named profile is
+ * preferred over XCP_CTRL_HID_GENERIC; `wanted` overrides that preference.
+ * Returns 1 and fills `out`.
  */
 int xcp_usb_find(xcp_usb_backend *backend, void *ctx,
                  xcp_controller_type wanted, xcp_usb_device_info *out);

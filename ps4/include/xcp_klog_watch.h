@@ -1,19 +1,11 @@
 /*
- * ps4/include/xcp_klog_watch.h - reading /dev/klog while a device is created.
+ * ps4/include/xcp_klog_watch.h - reading the kernel log while a device is
+ * created.
  *
  * The handle AddDevice produced is only announced in the kernel log, so we have
- * to read it. Two things make that delicate:
- *
- *  * /dev/klog has a SINGLE reader. GoldHEN's log server keeps it only while a
- *    client is connected and can go a long time without serving the next one, so
- *    while we hold the device open the user cannot read klog over the network -
- *    which is how they would send us the log. We therefore open it only around
- *    AddDevice and close it again immediately.
- *
- *  * The log carries everything the console does. We accept only the login
- *    manager's event for a pad (subType 2) - see xcp/klog_line.h - and we prove
- *    to ourselves that the reader really delivers by writing a marker line and
- *    waiting for it to come back before trusting anything else we read.
+ * to read it. GoldHEN's TCP log server on 127.0.0.1:3232 is tried first;
+ * /dev/klog is the fallback and has a single reader, so it is opened only
+ * around AddDevice and closed immediately afterwards.
  */
 #ifndef XCP_KLOG_WATCH_H
 #define XCP_KLOG_WATCH_H
@@ -25,12 +17,14 @@
 
 typedef struct xcp_klog_watch {
     int32_t fd;
+    int     is_socket;
     char    line[XCP_KLOG_LINE_MAX];
     unsigned used;
     int      saw_marker;
 } xcp_klog_watch;
 
-/* Opens /dev/klog non-blocking. Returns 0 on success, -1 otherwise. */
+/* Opens GoldHEN's klog TCP server, falling back to /dev/klog. Returns 0 on
+ * success, -1 otherwise. */
 int xcp_klog_watch_open(xcp_klog_watch *w);
 
 void xcp_klog_watch_close(xcp_klog_watch *w);
@@ -40,11 +34,8 @@ void xcp_klog_watch_close(xcp_klog_watch *w);
 void xcp_klog_watch_drain(xcp_klog_watch *w);
 
 /*
- * Write the self-test marker (a line containing "xcp: marker") into the kernel
- * log. It has to be emitted BEFORE AddDevice: the libScePad patch makes
- * AddDevice add the device synchronously, so its event lands in the log during
- * the call, and the reader would otherwise see it before the marker and refuse
- * it as pre-existing.
+ * Write a marker line into the kernel log. It is emitted before AddDevice only
+ * for troubleshooting; drain() already marks the read position as current.
  */
 void xcp_klog_watch_mark(const char *marker);
 

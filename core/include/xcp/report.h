@@ -18,7 +18,9 @@ typedef enum xcp_controller_type {
     XCP_CTRL_XBOXONE,
     XCP_CTRL_SWITCH,
     XCP_CTRL_XBOX_SERIES,
-    XCP_CTRL_DUALSENSE
+    XCP_CTRL_DUALSENSE,
+    XCP_CTRL_SWITCH_PRO,
+    XCP_CTRL_HID_GENERIC
 } xcp_controller_type;
 
 /* Human readable name of a controller type (never NULL). */
@@ -177,6 +179,59 @@ typedef struct __attribute__((packed)) {
 #define XCP_SWITCH_HAT_CENTERED   8u
 
 /* -------------------------------------------------------------------------
+ * Nintendo Switch Pro / third-party pad in Switch mode - USB input 0x30.
+ *
+ * Standard 49- or 64-byte report. The first 12 bytes are enough here:
+ *   [0] 0x30, [1] timer, [2] battery/connection
+ *   [3] Y B A X, R, ZR
+ *   [4] Minus Plus R3 L3 Home Capture
+ *   [5] D-pad (down/up/right/left), L, ZL
+ *   [6..8]   left  stick, 12-bit packed (X low, X high / Y low, Y high)
+ *   [9..11]  right stick, same packing
+ * ---------------------------------------------------------------------- */
+#define XCP_SWITCH_PRO_REPORT_ID 0x30u
+#define XCP_SWITCH_PRO_MIN_SIZE  13u
+
+typedef struct __attribute__((packed)) {
+    uint8_t report_id;      /* [0]  0x30 */
+    uint8_t timer;          /* [1] */
+    uint8_t battery;        /* [2] */
+    uint8_t buttons_right;  /* [3] */
+    uint8_t buttons_shared; /* [4] */
+    uint8_t buttons_left;   /* [5] */
+    uint8_t left_x_lo;      /* [6] */
+    uint8_t left_xy_hi;     /* [7] */
+    uint8_t left_y_hi;      /* [8] */
+    uint8_t right_x_lo;     /* [9] */
+    uint8_t right_xy_hi;    /* [10] */
+    uint8_t right_y_hi;     /* [11] */
+} xcp_switch_pro_report;
+
+/* xcp_switch_pro_report.buttons_right bits */
+#define XCP_SWPRO_Y       0x01u
+#define XCP_SWPRO_B       0x02u
+#define XCP_SWPRO_A       0x04u
+#define XCP_SWPRO_X       0x08u
+#define XCP_SWPRO_R       0x40u
+#define XCP_SWPRO_ZR      0x80u
+
+/* xcp_switch_pro_report.buttons_shared bits */
+#define XCP_SWPRO_MINUS   0x01u
+#define XCP_SWPRO_PLUS    0x02u
+#define XCP_SWPRO_R3      0x04u
+#define XCP_SWPRO_L3      0x08u
+#define XCP_SWPRO_HOME    0x10u
+#define XCP_SWPRO_CAPTURE 0x20u
+
+/* xcp_switch_pro_report.buttons_left bits */
+#define XCP_SWPRO_DOWN    0x01u
+#define XCP_SWPRO_UP      0x02u
+#define XCP_SWPRO_RIGHT   0x04u
+#define XCP_SWPRO_LEFT    0x08u
+#define XCP_SWPRO_L       0x40u
+#define XCP_SWPRO_ZL      0x80u
+
+/* -------------------------------------------------------------------------
  * Sony DualSense (PS5 pad) / DualSense Edge - USB input report 0x01.
  *
  * The wired USB report is 64 bytes. Only the first 11 are needed here; the
@@ -241,6 +296,8 @@ typedef struct __attribute__((packed)) {
 #define XCP_PID_360_WLESS 0x0719u /* Xbox 360 wireless receiver (unsupported) */
 
 #define XCP_VID_PDP       0x0E6Fu
+#define XCP_VID_NINTENDO  0x057Eu
+#define XCP_PID_SWITCH_PRO 0x2009u
 
 #define XCP_VID_SONY          0x054Cu
 #define XCP_PID_DUALSENSE     0x0CE6u
@@ -267,5 +324,19 @@ int xcp_is_pdp_switch_pid(uint16_t pid);
  * Xbox One/Series-family pad uses the same GIP format.
  */
 xcp_controller_type xcp_controller_type_for_ids(uint16_t vid, uint16_t pid);
+
+/*
+ * Pick a protocol from the device ids *and* the interface descriptor. This is
+ * what a real USB backend uses: some third-party pads use a Microsoft id with
+ * a GIP interface, and unknown vendor ids can still be recognised from the
+ * Xbox 360 / GIP interface class. An unknown HID interface is only a
+ * candidate: the backend still has to read its report descriptor and prove it
+ * is a gamepad before opening it.
+ */
+xcp_controller_type xcp_controller_type_for_interface(uint16_t vid, uint16_t pid,
+                                                      uint8_t iface_class,
+                                                      uint8_t iface_subclass,
+                                                      uint8_t iface_protocol,
+                                                      int has_interrupt_in);
 
 #endif /* XCP_REPORT_H */

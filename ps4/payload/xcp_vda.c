@@ -12,6 +12,15 @@
 
 #include <stddef.h>
 #include <string.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+extern uint64_t kernel_get_ucred_authid(pid_t pid);
+extern int32_t  kernel_set_ucred_authid(pid_t pid, uint64_t authid);
+extern int32_t  kernel_get_ucred_caps(pid_t pid, uint8_t caps[16]);
+extern int32_t  kernel_set_ucred_caps(pid_t pid, const uint8_t caps[16]);
+
+#define XCP_VDA_AUTHID 0x3800000000010003ULL
 
 /*
  * The motion block: quat (4 floats, identity for "not moving"), then vel, then
@@ -67,12 +76,89 @@ int xcp_vda_mbus_load(void)
     return 0;
 }
 
+static uint64_t g_saved_authid;
+static uint8_t  g_saved_caps[16];
+static int      g_saved;
+static int      g_raised;
+
+int xcp_vda_creds_active(void)
+{
+    return g_raised;
+}
+
+int xcp_vda_creds_raise(void)
+{
+    uint8_t caps[16];
+    uint8_t now_caps[16];
+    pid_t   pid = getpid();
+
+    if (g_raised) return 0;
+
+    memset(caps, 0xFF, sizeof(caps));
+    g_saved_authid = kernel_get_ucred_authid(pid);
+    if (!g_saved_authid) {
+        printf(XCP_TAG "our original authid is zero; not elevating\n");
+        return -1;
+    }
+    if (kernel_get_ucred_caps(pid, g_saved_caps) != 0) {
+        printf(XCP_TAG "kernel_get_ucred_caps failed; not elevating\n");
+        return -1;
+    }
+    g_saved = 1;
+
+    if (kernel_set_ucred_authid(pid, XCP_VDA_AUTHID) != 0 ||
+        kernel_set_ucred_caps(pid, caps) != 0) {
+        printf(XCP_TAG "credential elevation failed\n");
+        xcp_vda_creds_restore();
+        return -1;
+    }
+
+    if (kernel_get_ucred_authid(pid) != XCP_VDA_AUTHID ||
+        kernel_get_ucred_caps(pid, now_caps) != 0 ||
+        memcmp(now_caps, caps, sizeof(caps)) != 0) {
+        printf(XCP_TAG "credential elevation did not stick; putting the old "
+                       "credentials back\n");
+        xcp_vda_creds_restore();
+        return -1;
+    }
+
+    g_raised = 1;
+    printf(XCP_TAG "credentials elevated (authid=0x%llX)\n",
+           (unsigned long long)XCP_VDA_AUTHID);
+    return 0;
+}
+
+int xcp_vda_creds_restore(void)
+{
+    pid_t pid = getpid();
+
+    if (!g_saved) return -1;
+
+    if (kernel_set_ucred_authid(pid, g_saved_authid) != 0 ||
+        kernel_set_ucred_caps(pid, g_saved_caps) != 0) {
+        printf(XCP_TAG "could not restore original credentials\n");
+        return -1;
+    }
+
+    g_saved  = 0;
+    g_raised = 0;
+    printf(XCP_TAG "original credentials restored\n");
+    return 0;
+}
+
 int xcp_vda_pad_init(void)
 {
     int32_t ret;
 
     ret = scePadInit();
     printf(XCP_TAG "scePadInit() = 0x%08X\n", (unsigned)ret);
+    if (ret != 0 && g_raised) {
+        printf(XCP_TAG "scePadInit refused the raised credentials; retrying "
+                       "with the process's original credentials\n");
+        xcp_vda_creds_restore();
+        ret = scePadInit();
+        printf(XCP_TAG "scePadInit() retry = 0x%08X\n", (unsigned)ret);
+    }
     if (ret != 0) {
         printf(XCP_TAG "scePadInit failed; nothing else can work\n");
         return -1;
@@ -91,7 +177,7 @@ int xcp_vda_pad_init(void)
 
 /* --- device lifecycle --------------------------------------------------- */
 
-int32_t xcp_vda_add_device(int32_t user_id)
+int32_t xcp_vda_add_device(int32_t user_id, int32_t device_type, int sentinel)
 {
     xcp_vda_add_param param;
     unsigned         i;
@@ -100,11 +186,16 @@ int32_t xcp_vda_add_device(int32_t user_id)
     memset(&param, 0, sizeof(param));
     param.size    = (int32_t)sizeof(param);
     param.user_id = user_id;
+    if (sentinel) {
+        for (i = 0; i < sizeof(param.pad) / sizeof(param.pad[0]); i++) {
+            param.pad[i] = (int32_t)0xDEADBEEFu;
+        }
+    }
 
-    ret = scePadVirtualDeviceAddDevice(&param, XCP_VDA_DEVICE_TYPE);
+    ret = scePadVirtualDeviceAddDevice(&param, device_type);
 
     printf(XCP_TAG "AddDevice(size=%d user=%d type=%d) = 0x%08X\n",
-           (int)param.size, (int)param.user_id, (int)XCP_VDA_DEVICE_TYPE,
+           (int)param.size, (int)param.user_id, (int)device_type,
            (unsigned)ret);
 
     /* Whatever came back, the device may exist: the handle is not in here. */

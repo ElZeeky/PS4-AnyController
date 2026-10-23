@@ -93,7 +93,7 @@ static void cmd_list(void)
     if (interesting == 0) {
         printf("\nNo supported pad found.\n");
         printf("Checklist if the controller is physically plugged in:\n");
-        printf("  * put the pad in wired mode (not Bluetooth, not Switch mode)\n");
+        printf("  * put the pad in wired mode (not Bluetooth); Switch pads can use USB mode\n");
         printf("  * an Xbox-format pad in XInput/GIP mode is claimed by its\n");
         printf("    kernel driver and may not appear in the HID list at all;\n");
         printf("    look for a USB entry with vendor id 045E\n");
@@ -127,7 +127,8 @@ static void cmd_list(void)
  * A leading token ending in ':' is treated as that prefix and dropped, so the
  * text can be pasted verbatim without spoiling the `xcpcapture` label.
  */
-#define XCP_MAX_TOKENS  64
+#define XCP_MAX_TOKENS  256
+#define XCP_MAX_LINE    4096
 #define XCP_MAX_LABEL   64
 #define XCP_LABEL_WIDTH 20
 
@@ -170,7 +171,7 @@ static unsigned hex_pair(const char *tok)
 static int parse_dump_line(const char *line, uint8_t *out, size_t out_size,
                           size_t *out_len, char *label_out, size_t label_size)
 {
-    char        work[1024];
+    char        work[XCP_MAX_LINE];
     const char *tok[XCP_MAX_TOKENS];
     size_t      tok_len[XCP_MAX_TOKENS];
     unsigned    ntok = 0;
@@ -315,11 +316,12 @@ static int xcp_is_known_unsupported_pad(uint16_t vid, uint16_t pid)
 static int cmd_play(const char *path)
 {
     FILE  *f;
-    char   line[512];
+    char   line[XCP_MAX_LINE];
     int    lineno = 0;
     int    decoded = 0;
     int    rejected = 0;
     int    warned_unknown = 0;
+    int    warned_generic = 0;
     uint32_t seen_buttons = 0;
     uint8_t  lx_min = 255, lx_max = 0;
     uint8_t  ly_min = 255, ly_max = 0;
@@ -419,6 +421,9 @@ static int cmd_play(const char *path)
                 } else if (xcp_report_looks_valid(XCP_CTRL_XBOXONE, buf,
                                                   len)) {
                     type = XCP_CTRL_XBOXONE;
+                } else if (xcp_report_looks_valid(XCP_CTRL_SWITCH_PRO, buf,
+                                                  len)) {
+                    type = XCP_CTRL_SWITCH_PRO;
                 } else if (len == XCP_SWITCH_REPORT_SIZE) {
                     type = XCP_CTRL_SWITCH;
                 } else {
@@ -426,10 +431,18 @@ static int cmd_play(const char *path)
                      * wrapped or truncated is the likeliest reason. */
                     printf("  %-*.*s %2zu bytes  REJECTED (no protocol "
                            "matches; Xbox 360 %d, Xbox One/Series %d, "
-                           "Switch %d, DualSense >= %d)\n",
+                           "Switch PDP %d, Switch Pro >= %d, "
+                           "DualSense >= %d)\n",
                            XCP_LABEL_WIDTH, XCP_LABEL_WIDTH, label, len,
                            XCP_XBOX360_REPORT_SIZE, XCP_XBOXONE_REPORT_SIZE,
-                           XCP_SWITCH_REPORT_SIZE, XCP_DUALSENSE_MIN_SIZE);
+                           XCP_SWITCH_REPORT_SIZE, XCP_SWITCH_PRO_MIN_SIZE,
+                           XCP_DUALSENSE_MIN_SIZE);
+                    if (have_header_ids && !warned_generic) {
+                        printf("      note: a Generic HID/D-Input capture "
+                               "needs its report descriptor; --play cannot "
+                               "rebuild that map from the report bytes.\n");
+                        warned_generic = 1;
+                    }
                     rejected++;
                     continue;
                 }
@@ -589,6 +602,32 @@ static int cmd_selftest(void)
 
     xcp_router_describe(&router, line, sizeof(line));
     printf("  router: %s\n", line);
+
+    /* --- dump-line parser: 190 label tokens + 64 report bytes = 254 tokens --- */
+    {
+        char     long_line[XCP_MAX_LINE];
+        uint8_t  long_buf[XCP_USB_MAX_REPORT];
+        size_t   long_len = 0;
+        size_t   w = 0;
+        char     long_label[XCP_MAX_LABEL];
+        size_t   i;
+
+        for (i = 0; i < 190 && w + 3 < sizeof(long_line); i++) {
+            long_line[w++] = 'l';
+            long_line[w++] = ' ';
+        }
+        memset(long_buf, 0, sizeof(long_buf));
+        long_buf[0] = XCP_SWITCH_PRO_REPORT_ID;
+        for (i = 0; i < sizeof(long_buf) && w + 4 < sizeof(long_line); i++) {
+            w += (size_t)snprintf(long_line + w, sizeof(long_line) - w,
+                                  "%02X ", (unsigned)long_buf[i]);
+        }
+        long_line[w > 0 ? w - 1 : 0] = '\0';
+        check(parse_dump_line(long_line, long_buf, sizeof(long_buf), &long_len,
+                              long_label, sizeof(long_label)) == 1 &&
+              long_len == sizeof(long_buf),
+              "a 254-token dump line keeps the full 64-byte report");
+    }
 
     printf("\n%s\n", g_selftest_failures ? "\033[31mSELFTEST FAILED\033[0m"
                                         : "\033[32mSELFTEST OK\033[0m");

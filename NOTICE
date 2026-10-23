@@ -48,6 +48,19 @@ to the port.
   Our implementation of all of it is our own; the licence boundary is the reason
   this paragraph exists.
 
+## vld439/anypad-ps4 (AnyPad PS4)
+
+* Source: https://github.com/vld439/anypad-ps4
+* Licence: **GPL-3.0-or-later**
+* Used for: **behaviour only, no code.** AnyPad PS4 demonstrates that a payload can
+  create a virtual pad on newer firmware without the 11.00 callsite patch by raising
+  its credentials to authid `0x3800000000010003` with full capabilities, calling
+  `scePadVirtualDeviceAddDevice` directly with device type `1`, and reading the
+  `DEVICE_ADDED` event from GoldHEN's klog TCP server on port `3232`. Those API facts
+  guided the direct-path, klog and diagnostic work in this project. The implementation
+  here is independent; AnyPad is GPL-3.0 and none of its source is copied into this
+  MIT-licensed tree.
+
 ## OpenOrbis PS4 Toolchain
 
 * Source: https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain

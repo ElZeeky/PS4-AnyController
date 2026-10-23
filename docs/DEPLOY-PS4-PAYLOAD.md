@@ -30,9 +30,18 @@ exploit and starts GoldHEN. After that the virtual pad can take over every scree
   version string); if it is older, update GoldHEN first.
 * The virtual-device API is known to work on firmware 10.01 and 11.02, and **11.00 is now
   confirmed working too** (this project, with the libScePad patch described below).
-* The Xbox pad's receiver plugged into the console's USB port. The pad's own dongle is
-  the input source; the console does not have to understand it as a pad, because we read
-  it directly over `sceUsbd`.
+  The current build first tries a **direct** AnyPad-style path on every firmware; on 11.00
+  it falls back to the confirmed patch if the direct call produces no klog event. The
+  direct path has now been observed creating and feeding a virtual pad on 11.00; 13.52
+  and the on-screen assignment prompt are still waiting for console testers.
+* The controller's receiver or USB cable plugged into the console's USB port. The pad's
+  own dongle is the input source; the console does not have to understand it as a pad,
+  because we read it directly over `sceUsbd`.
+* Controller support is **evidence-based**. Only the Manba One V2 in Xbox 360 mode on
+  firmware 11.00 is confirmed; Switch Pro is partial, and DualSense/Edge, Xbox
+  One/Series GIP, 8BitDo, GameSir, Generic HID and firmware 13.52 are untested. The
+  per-result table with firmware, GoldHEN, mode and connection is
+  [`COMPATIBILITY.md`](COMPATIBILITY.md).
 * Zig, which this project already uses, and git. **No Linux, no `make`, no Docker and
   no separately installed LLVM** - see below.
 
@@ -124,24 +133,25 @@ payload: klog has a single reader, and a client holding it can stop the payload 
 its own handle event. If `printf` output never shows there, GoldHEN's **TTY redirect**
 option is off - the file above is unaffected.
 
-These are the lines that matter, in the order they should appear (this is the real FW 11.00
-shape, taken from a working run):
+These are the lines that matter. The current build starts with the direct path; on FW 11.00
+a direct failure is followed by the confirmed callsite patch:
 
 ```
 xcp: =============================================
-xcp: virtual-pad payload starting
+xcp: virtual-pad payload 1.2.0-dev starting (built ...)
+xcp: firmware 11.00 (raw 0x...)
 xcp: sizeof(OrbisPadData) = 120
-xcp: sceUsbd init ok
 xcp: usb: 1 device(s) visible
 xcp:   usb[0] 045E:028E 045E:028E (Xbox 360)      <- the receiver
 xcp: opened 045E:028E as Xbox 360
 xcp: input source ready: 045E:028E (Xbox 360)
 xcp: sceKernelLoadStartModule(/system/common/lib/libSceMbus.sprx) = 0x...
+xcp: credentials elevated (authid=0x3800000000010003)
 xcp: scePadInit() = 0x00000000
 xcp: scePadSetProcessPrivilege(1) = 0x00000000
-xcp: vda patch: applied (cave stub + retargeted call)
-xcp: marker add
-xcp: AddDevice(size=32 user=1 type=3) = 0x00000000     <- 0 because of the patch
+xcp: klog: using GoldHEN TCP server 127.0.0.1:3232
+xcp: vda: direct AddDevice (type 1)
+xcp: AddDevice(size=32 user=1 type=1) = 0x...   <- 0x803B0006 still created a pad on 11.00
 xcp: klog pad-added: <118>#LOGIN MGR# Receive Event : SCE_MBUS_EVENT_DEVICE_ADDED ...
 xcp:   parsed DeviceId = 0x5030D
 xcp: device adopted: DeviceId=0x5030D handle=0x0005030D
@@ -149,15 +159,44 @@ xcp: bind skipped: press a button on the controller to accept the assignment pro
 xcp: first InsertData(handle=0x0005030D) = 0x00000000
 ```
 
-**Two things to know about this shape:**
+If the direct call produces no event, FW 11.00 additionally shows:
 
-* `vda patch: applied` is mandatory. The patch retargets one internal call inside
-  libScePad's `scePadVirtualDeviceAddDevice` so it returns `0`; without it `AddDevice`
-  answers `0x803B0006` and no device is really created. The patch is guarded - if the call
-  site is not the FW 11.00 one it prints `vda patch: ... not patching` and stops rather
-  than corrupt a system library.
-* `AddDevice = 0x00000000` (with the patch) means success. If you see `0x803B0006`
-  instead, the patch did not apply - send the `vda patch:` line above it.
+```
+xcp: vda: direct AddDevice produced no klog event; trying the FW 11.00 callsite patch fallback
+xcp: vda patch: applied (cave stub + retargeted call)
+xcp: vda: patched AddDevice (type 3)
+xcp: AddDevice(size=32 user=1 type=3) = 0x00000000
+```
+
+Newer builds also show how the controller interface was chosen:
+
+```
+xcp: device: 2 interface(s), config value 1
+xcp:   iface 0: class FF sub 5D proto 01, 2 endpoint(s)
+xcp:   iface 1: class 03 sub 00 proto 00, 1 endpoint(s)
+xcp: reading interrupt IN on EP 0x81 of interface 0
+xcp: opened 045E:028E as Xbox 360
+```
+
+For an unknown HID gamepad the descriptor is read before it is accepted:
+
+```
+xcp: generic HID: 11 buttons, descriptor 123 bytes
+```
+
+`generic HID: no gamepad descriptor` means the interface was a keyboard, mouse or vendor
+collection and was deliberately skipped; it is not an error. A device that enumerates but
+never sends a decodable report does not create a virtual pad.
+
+**What matters here:**
+
+* The **`klog pad-added` line**, not the return value alone, proves the device exists. Some
+  firmware reports a non-zero `AddDevice` status even when the device is created.
+* The direct path is tried first on every firmware. The callsite patch is used **only** on
+  FW 11.00 and only after the **5 s** direct-path wait. On other firmware the payload logs
+  `no callsite patch for firmware X.YY` and stops rather than patching blindly.
+* `AddDevice = 0x803B0006` with no following `klog pad-added` means neither path created
+  the device; send the `vda:` and `AddDevice` lines.
 * `bind skipped` means the console's **"Who's using this controller?"** prompt is answered
   by **pressing a button on the controller**, not automatically.
 
@@ -165,9 +204,11 @@ xcp: first InsertData(handle=0x0005030D) = 0x00000000
 |---|---|
 | nothing at all | the payload did not start; check the path and GoldHEN's version |
 | `libSceMbus did not load` | the payload stopped before touching libScePad, on purpose - calling into it first can kill the process it runs in |
-| `open(/dev/klog) failed` | another reader has the log (GoldHEN's log server does while a client is connected). Close the log client and start the payload again |
-| `scePadInit failed` | the pad service is not available to this process |
-| `no device event within 700 ms` | the console did not announce a new device. The payload stops rather than leave a device it cannot address |
+| `klog: using ...` | which klog source was opened; TCP `3232` is preferred, `/dev/klog` is the fallback |
+| `open(/dev/klog) failed` / `klog unavailable` | neither klog source was available, so the handle cannot be learned. Close any other klog reader and retry |
+| `scePadInit failed` | the pad service is not available to this process; send the `scePadInit` lines |
+| `credentials elevated` is missing | the direct path may not work, but on 11.00 the callsite-patch fallback can still succeed |
+| `no device event within 5000 ms` | that attempt did not announce a device. On 11.00 the payload then tries the confirmed patch; on newer firmware it stops rather than patch blindly |
 | `usb: nothing at all` | `sceUsbd` sees no devices at all, so it is not the receiver that is the problem |
 | the receiver is not listed | note its real `VID:PID` and send it: the decoder has to be told about a new id |
 | `found ... but could not open it` | the receiver was seen but `sceUsbdOpen` refused, or no interface could be claimed (look at the `iface`/`claim` lines just above it) |
@@ -212,11 +253,12 @@ still be used as before.
 ## 7. If it misbehaves
 
 1. **Stop the payload.** The payload itself has **no stop button** - it is a loop with no
-   exit, and its libScePad patch lives only in that process's RAM. **Rebooting the console
-   is the reliable way to stop it**, and it clears the patch and the virtual device. If
-   your GoldHEN build lets the loader kill a running payload, that works too. **Turning the
-   controller off** makes the payload delete the virtual pad (so the console goes back to
-   normal), but the payload code keeps running. See section 9.
+   exit, and its libScePad patch (when the 11.00 fallback ran) and raised credentials live
+   only in that process. **Rebooting the console is the reliable way to stop it**, and it
+   clears the patch, credentials and virtual device. If your GoldHEN build lets the loader
+   kill a running payload, that works too. **Turning the controller off** makes the payload
+   delete the virtual pad (so the console goes back to normal), but the payload code keeps
+   running. See section 9.
 2. **Take the receiver out** - same as turning the pad off: the virtual pad is removed.
 3. **Reboot** clears everything. Nothing is written anywhere outside
    `/data/payloads/` and `/data/GoldHEN/payloads.ini`.
@@ -227,8 +269,8 @@ Things that are true by construction:
   the receiver's reports, decoded by the same code the PC tests exercise.
 * If `sceUsbd` or the virtual-device API is unavailable, it says so and stops; it never
   touches your existing controllers.
-* It only holds `/dev/klog` for the ~1 second it needs to learn the device handle, so
-  your klog server works normally the rest of the time.
+* It prefers GoldHEN's TCP klog on `127.0.0.1:3232` and only falls back to `/dev/klog`.
+  It needs the log for up to **5 s** to learn the device handle, then closes it.
 * The virtual pad is created for **user 1 unassigned**, so the choice of user stays on
   the console and sign-in keeps working without a physical pad.
 
@@ -240,7 +282,8 @@ Things that are true by construction:
    `virtual-pad payload starting` on), or the fact that the file does not exist.
 2. The `usb:` block in particular - that is what decides the next step.
 3. The `xcpcapture` lines.
-4. Which GoldHEN version, which firmware, and in which menus the virtual pad worked.
+4. Which GoldHEN version, which firmware, the controller model and mode, the connection
+   (USB cable or receiver), and in which menus the virtual pad worked.
 
 ---
 

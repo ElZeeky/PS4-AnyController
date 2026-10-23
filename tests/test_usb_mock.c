@@ -135,6 +135,19 @@ XCP_TEST(mock_queue_is_fifo_and_bounded)
     b->close(NULL, h);
 }
 
+XCP_TEST(usb_timeout_codes_are_not_disconnects)
+{
+    XCP_CHECK(xcp_usb_status_is_timeout(-7));
+    XCP_CHECK(xcp_usb_status_is_timeout((int32_t)0x80240007u));
+
+    /* These are real removal codes; treating them as timeouts would leave a
+     * stale virtual pad behind. */
+    XCP_CHECK_FALSE(xcp_usb_status_is_timeout((int32_t)0x802400FFu));
+    XCP_CHECK_FALSE(xcp_usb_status_is_timeout((int32_t)0x80240004u));
+    XCP_CHECK_FALSE(xcp_usb_status_is_timeout((int32_t)0x80240006u));
+    XCP_CHECK_FALSE(xcp_usb_status_is_timeout(0));
+}
+
 XCP_TEST(mock_start_handshake_is_optional_but_reachable)
 {
     xcp_usb_backend    *b = xcp_usb_mock_backend();
@@ -156,5 +169,6 @@ void xcp_register_usb_mock_tests(void)
     XCP_RUN(mock_enumerates_and_classifies_a_xbox_pad);
     XCP_RUN(mock_reports_disconnect_and_no_data);
     XCP_RUN(mock_queue_is_fifo_and_bounded);
+    XCP_RUN(usb_timeout_codes_are_not_disconnects);
     XCP_RUN(mock_start_handshake_is_optional_but_reachable);
 }

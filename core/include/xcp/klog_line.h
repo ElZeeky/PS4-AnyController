@@ -23,11 +23,13 @@
  * Is `line` the login manager's "a device was added" event for a pad created
  * through the virtual-device API?
  *
- * The match is deliberately strict. subType 2 is the Remote Play pad, i.e. the
- * kind of device we create. Nothing looser is accepted, because a real pad being
- * plugged in, or any other MBus device appearing in the same window, would
- * otherwise hand us a DeviceId that is not ours - and every button we then
- * reported would go to a device we do not own.
+ * The match is deliberately strict. type 1 is a controller and subType 2 is the
+ * Remote Play pad, i.e. the kind of device we create. The DeviceId must also
+ * have a non-zero low byte: pads on the console's own ports re-register as
+ * 0x30300 / 0x90300, while virtual ids look like 0x5030D / 0x7030D. Nothing
+ * looser is accepted, because a real pad or another MBus device appearing in the
+ * same window would otherwise hand us a DeviceId that is not ours - and every
+ * button we then reported would go to a device we do not own.
  */
 int xcp_klog_is_virtual_pad_added(const char *line);
 
