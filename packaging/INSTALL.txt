@@ -20,9 +20,11 @@ Files here:
 What you need
 -------------
 
-* A PS4 on firmware 11.00 with GoldHEN v2.4b18.10 or newer already running.
-  Newer firmware uses a direct API path that still needs console testers; 11.00
-  also has the confirmed callsite-patch fallback.
+* A PS4 on firmware 11.00, 9.00 or 13.52 with GoldHEN v2.4b18.10 or newer already
+  running. All three create the virtual pad through the direct API path (seen
+  working in console logs: 11.00 by the author, 9.00 and 13.52 in tester logs);
+  11.00 also has the confirmed callsite-patch fallback. Other firmware uses the
+  same direct path but has not been seen working.
 * A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional
   afterwards.
 * Your controller's USB receiver (or cable) in a PS4 USB port.
@@ -42,17 +44,39 @@ Partial:
     PS4 11.00, same GoldHEN. Pad created and fed, Y-axis fixed, no output
     errors; physical face-button labels are still unconfirmed.
 
+    GameSir T4 Cyclone Pro receiver, Switch Pro mode, PS4 9.00 (tester log).
+    Pad created and fed through the direct path. Face buttons were crossed in
+    the build that was tested; fixed since, not yet re-tested on a console.
+
+    GameSir T4 Cyclone Pro receiver in its own Xbox mode (3537:1015), PS4 9.00
+    (tester log). Opened and fed; a face-button workaround meant for the Manba
+    was applied by mistake after a Switch session. Fixed since, not re-tested.
+
+Seen working in a tester log:
+    GameSir Nova Lite receiver, Xbox 360 mode (3537:1040), PS4 13.52. Pad
+    created and fed; sticks, D-pad and LB/RB appear in the log. Face buttons
+    and triggers were not pressed in that run.
+
+Failing:
+    DualSense 054C:0CE6 (PS4 9.00 and 10.01) and Logitech Dual Action
+    046D:C216 (PS4 9.00). The controller opens but sends no data to the
+    payload. The cause is not known yet. This build tries recovery steps and
+    writes each one to the log; if you test one of these, please send
+    /data/AnyController.log.
+
 Unsupported:
     DualSense/Edge adaptive triggers, haptics, LEDs, mic mute, battery state and
     touchpad coordinates. The virtual pad is input-only, on every firmware.
     DS4/DS4-mode pads are left to the console's native driver.
+    PS3 pads, the Xbox 360 wireless receiver, steering wheels, keyboards and mice.
 
 Untested:
-    DualSense 054C:0CE6 and Edge 054C:0DF2 basic input (9.60 capture requested;
-    no console run), Xbox One/Series GIP including 13.52 (old log invalid),
-    8BitDo Xbox/Switch/D-Input, GameSir T4 Cyclone Pro and "GameSir 2",
-    Generic HID / Logitech F310, and Machenike G1 on 13.52. No GoldHEN run for
-    these configurations. Do not report them as working.
+    DualSense Edge 054C:0DF2 basic input, Xbox One/Series GIP including 13.52
+    (the one log showed no USB devices), 8BitDo Xbox/Switch/D-Input (the log
+    sent as 8BitDo was another controller's), "GameSir 2", Generic HID pads
+    other than the failing Logitech Dual Action (for example the F310), and
+    Machenike G1 on 13.52 with the current build. Do not report these as
+    working.
 
 Full table with firmware, GoldHEN, mode, connection and evidence:
 COMPATIBILITY.md.
@@ -121,5 +145,14 @@ FTP and read it; the project's README has the full guide. The most common issues
   callsite, so it refused to touch the system library. Update / report it.
 * No "Who's using this controller?" prompt -> the receiver may not be a known
   device; check the "usb:" lines and the AddDevice/klog lines in the log.
+* "no supported controller found; USB bus now:" -> the lines under it are what
+  the console sees. If your controller is not listed there, the console does not
+  see it at all (try another port or cable).
+* "klog reader did not echo our marker" or "gave up after 3 AddDevice attempts"
+  -> the kernel log never named the new device. Close any other klog client and
+  replug the controller to try again.
+* "controller opens but sends no data" or "reports arrive but none decode" ->
+  send the log; the lines just above show the controller's interfaces and the
+  recovery steps that were tried.
 
 Nothing here is permanent and nothing is written outside /data/.

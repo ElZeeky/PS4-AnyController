@@ -32,15 +32,18 @@ exploit and starts GoldHEN. After that the virtual pad can take over every scree
   confirmed working too** (this project, with the libScePad patch described below).
   The current build first tries a **direct** AnyPad-style path on every firmware; on 11.00
   it falls back to the confirmed patch if the direct call produces no klog event. The
-  direct path has now been observed creating and feeding a virtual pad on 11.00; 13.52
-  and the on-screen assignment prompt are still waiting for console testers.
+  direct path has been observed creating and feeding a virtual pad on 11.00, and tester
+  logs show it doing the same on 9.00 and 13.52. Those logs do not record the on-screen
+  assignment prompt, so that part is still unconfirmed on those firmwares.
 * The controller's receiver or USB cable plugged into the console's USB port. The pad's
   own dongle is the input source; the console does not have to understand it as a pad,
   because we read it directly over `sceUsbd`.
 * Controller support is **evidence-based**. Only the Manba One V2 in Xbox 360 mode on
-  firmware 11.00 is confirmed; Switch Pro is partial, and DualSense/Edge, Xbox
-  One/Series GIP, 8BitDo, GameSir, Generic HID and firmware 13.52 are untested. The
-  per-result table with firmware, GoldHEN, mode and connection is
+  firmware 11.00 is confirmed by the author. Tester logs show a GameSir Nova Lite (Xbox
+  360 mode) working on 13.52 and a GameSir T4 receiver on 9.00 (its Switch Pro face
+  buttons were crossed in that build; fixed since). The DualSense and the Logitech Dual
+  Action currently fail; Xbox One/Series GIP, 8BitDo and other Generic HID pads are
+  untested. The per-result table with firmware, GoldHEN, mode and connection is
   [`COMPATIBILITY.md`](COMPATIBILITY.md).
 * Zig, which this project already uses, and git. **No Linux, no `make`, no Docker and
   no separately installed LLVM** - see below.
@@ -138,7 +141,7 @@ a direct failure is followed by the confirmed callsite patch:
 
 ```
 xcp: =============================================
-xcp: virtual-pad payload 1.2.0-dev starting (built ...)
+xcp: virtual-pad payload 1.2.0-beta.2 starting (built ...)
 xcp: firmware 11.00 (raw 0x...)
 xcp: sizeof(OrbisPadData) = 120
 xcp: usb: 1 device(s) visible
@@ -208,11 +211,17 @@ never sends a decodable report does not create a virtual pad.
 | `open(/dev/klog) failed` / `klog unavailable` | neither klog source was available, so the handle cannot be learned. Close any other klog reader and retry |
 | `scePadInit failed` | the pad service is not available to this process; send the `scePadInit` lines |
 | `credentials elevated` is missing | the direct path may not work, but on 11.00 the callsite-patch fallback can still succeed |
-| `no device event within 5000 ms` | that attempt did not announce a device. On 11.00 the payload then tries the confirmed patch; on newer firmware it stops rather than patch blindly |
+| `no device event within 5000 ms` | that attempt did not announce a device. On 11.00 the payload then tries the confirmed patch; on other firmware it does not patch blindly. After 3 attempts without a named device it stops creating pads until the controller is replugged |
 | `usb: nothing at all` | `sceUsbd` sees no devices at all, so it is not the receiver that is the problem |
 | the receiver is not listed | note its real `VID:PID` and send it: the decoder has to be told about a new id |
 | `found ... but could not open it` | the receiver was seen but `sceUsbdOpen` refused, or no interface could be claimed (look at the `iface`/`claim` lines just above it) |
 | `no claimable interrupt IN endpoint` | the descriptors showed no IN interrupt endpoint on any interface, so it fell back to interface 0 - send those `iface`/`ep` lines, they are the answer |
+| `klog reader did not echo our marker` | the payload wrote a marker line into the kernel log and the klog reader never saw it back, so the new device's event may be missed. Close any other klog client |
+| `gave up after 3 AddDevice attempts` | the kernel log never named a device after three tries, so no more are created (each one may have left an unnamed pad). Replug the controller to start over |
+| `no supported controller found; USB bus now:` | printed every 10 s while nothing usable is connected; the lines below are everything the console sees. A controller missing from that list is not visible to the console at all |
+| `reports arrive but none decode as ...` | the controller sends data the decoder does not recognise; the line shows the first bytes of one report - send it |
+| `open strategy N: ...` / `no report with strategy N` / `strategy N ... delivered a report` | the DualSense / Generic HID recovery steps: each failed open tries the next variant and the one that works is kept. Send these lines |
+| `DualSense probe: GET_REPORT(feature 0x05) ... -> N` | a read-only request used to tell "the endpoint is the problem" (this works, reads do not) from "the device is being reset" (both fail) |
 | `reading interrupt IN on EP 0x.. of interface ..` | what it settled on. If reports then never arrive, this line is the one to change |
 | `input source dropped (disconnect)` | the receiver was unplugged or a transfer failed; it is reopened on the next scan |
 

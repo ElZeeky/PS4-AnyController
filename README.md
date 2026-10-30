@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Payload binary: GPL-3.0](https://img.shields.io/badge/payload_binary-GPL--3.0-orange.svg)](NOTICE)
-[![Firmware: 9.00 and 11.00](https://img.shields.io/badge/firmware-9.00_%7C_11.00_seen_working-informational.svg)](#requirements)
+[![Firmware: 9.00, 11.00 and 13.52](https://img.shields.io/badge/firmware-9.00_%7C_11.00_%7C_13.52_seen_working-informational.svg)](#requirements)
 [![Platform: PS4 · GoldHEN](https://img.shields.io/badge/platform-PS4_%7C_GoldHEN-003791.svg)](#requirements)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/4TtyCpdgFq)
 
@@ -14,8 +14,8 @@ through Sony's own virtual-device API, so the system itself sees your controller
 everywhere, not just inside a game. Confirmed working on a real firmware 11.00 console;
 the current build also creates the pad through the direct API, without the older callsite
 patch, on 11.00. Tester logs show the same direct API path creating and feeding the pad on
-firmware 9.00 (a GameSir T4 receiver in Switch Pro mode). Firmware 13.52 is still waiting for
-console testers.
+firmware 9.00 (a GameSir T4 receiver in Switch Pro mode) and on firmware 13.52 (a GameSir
+Nova Lite receiver in Xbox 360 mode).
 
 > Based on [crucifix86/xbox_controller_plugin](https://github.com/crucifix86/xbox_controller_plugin)
 > (MIT). That project gives the pad player **2**; this is about player **1**. See [NOTICE](NOTICE).
@@ -42,9 +42,9 @@ console testers.
 
 ## Requirements
 
-- A PS4 on firmware **11.00** (confirmed, including the direct API path) or **9.00** (direct
-  API path seen working in tester logs), or a newer firmware (direct API path, awaiting
-  console testers), with **GoldHEN v2.4b18.10 or later**.
+- A PS4 on firmware **11.00** (confirmed, including the direct API path), or **9.00** or
+  **13.52** (direct API path seen working in tester logs), with **GoldHEN v2.4b18.10 or
+  later**.
 - A **wired controller**. The decoder understands the Xbox 360, Xbox One/Series,
   DualSense/DualSense Edge, Switch PDP and Switch Pro (`057E:2009`, report `0x30`) layouts,
   including clones that use them. Unknown HID gamepads are also tried from their report
