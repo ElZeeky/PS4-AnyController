@@ -2,18 +2,20 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Payload binary: GPL-3.0](https://img.shields.io/badge/payload_binary-GPL--3.0-orange.svg)](NOTICE)
-[![Firmware: 11.00 confirmed](https://img.shields.io/badge/firmware-11.00_confirmed-informational.svg)](#requirements)
+[![Firmware: 9.00 and 11.00](https://img.shields.io/badge/firmware-9.00_%7C_11.00_seen_working-informational.svg)](#requirements)
 [![Platform: PS4 · GoldHEN](https://img.shields.io/badge/platform-PS4_%7C_GoldHEN-003791.svg)](#requirements)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg)](https://discord.gg/4TtyCpdgFq)
 
-Use **any wired controller** as **PLAYER 1** on a jailbroken **PS4** — in every screen:
+Use a **wired controller** (see [Compatibility](#compatibility) for which ones are confirmed) as **PLAYER 1** on a jailbroken **PS4** — in every screen:
 home, settings, sign-in and games. A real DualShock 4 can stay connected and usable.
 
 It runs as a **GoldHEN payload** (`AnyController.elf`) and creates a **virtual DualShock 4**
 through Sony's own virtual-device API, so the system itself sees your controller
 everywhere, not just inside a game. Confirmed working on a real firmware 11.00 console;
 the current build also creates the pad through the direct API, without the older callsite
-patch, on 11.00. Firmware 13.52 is still waiting for console testers.
+patch, on 11.00. Tester logs show the same direct API path creating and feeding the pad on
+firmware 9.00 (a GameSir T4 receiver in Switch Pro mode). Firmware 13.52 is still waiting for
+console testers.
 
 > Based on [crucifix86/xbox_controller_plugin](https://github.com/crucifix86/xbox_controller_plugin)
 > (MIT). That project gives the pad player **2**; this is about player **1**. See [NOTICE](NOTICE).
@@ -34,15 +36,15 @@ patch, on 11.00. Firmware 13.52 is still waiting for console testers.
   process's RAM; nothing is written outside `/data/`.
 - **Unknown HID gamepads too** — if the report descriptor declares buttons, sticks and a
   hat, the fallback decodes it by field offsets; no clone-specific table is needed.
-- **Testable off-console** — a PC inspector exercises the same decoder (98 tests / 592 checks).
+- **Testable off-console** — a PC inspector exercises the same decoder (105 tests / 639 checks).
 
 ---
 
 ## Requirements
 
-- A PS4 on firmware **11.00** (confirmed, including the direct API path) or a newer
-  firmware (direct API path, awaiting console testers), with **GoldHEN v2.4b18.10 or
-  later**.
+- A PS4 on firmware **11.00** (confirmed, including the direct API path) or **9.00** (direct
+  API path seen working in tester logs), or a newer firmware (direct API path, awaiting
+  console testers), with **GoldHEN v2.4b18.10 or later**.
 - A **wired controller**. The decoder understands the Xbox 360, Xbox One/Series,
   DualSense/DualSense Edge, Switch PDP and Switch Pro (`057E:2009`, report `0x30`) layouts,
   including clones that use them. Unknown HID gamepads are also tried from their report
@@ -50,7 +52,12 @@ patch, on 11.00. Firmware 13.52 is still waiting for console testers.
   not the same as a confirmed console run; see [Compatibility](#compatibility).
 - On the **Manba One V2**, going from Switch mode back to wired PC leaves its face bits
   rotated until the pad is power-cycled; the payload compensates for that one transition.
-  A clean PC connection, or a different Xbox 360 pad, keeps the normal layout.
+  A clean PC connection, or a pad with another USB vendor id (for example the GameSir
+  T4's own Xbox mode), keeps the normal layout.
+- **Known not to work yet:** the DualSense (on every firmware tried so far the USB read aborts
+  straight after the claim; see [Compatibility](#compatibility)), the Xbox 360 *wireless*
+  receiver, and PS3 pads. Wheels, keyboards and mice are not supported, and the virtual pad is
+  input-only: no rumble, gyro or haptics.
 - A DS4 (or equivalent) to boot the console and start GoldHEN; it is optional afterwards.
 - A way to copy one file over FTP (e.g. FileZilla).
 

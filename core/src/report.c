@@ -85,10 +85,14 @@ xcp_controller_type xcp_controller_type_for_ids(uint16_t vid, uint16_t pid)
 {
     if (vid == XCP_VID_MICROSOFT) {
         if (pid == XCP_PID_XBOX360) return XCP_CTRL_XBOX360;
+        /* The wireless receiver speaks a different, framed protocol that no
+         * decoder here understands. Claiming it as GIP opens the device and
+         * then reads nothing, so report it as unsupported instead. */
+        if (pid == XCP_PID_360_WLESS) return XCP_CTRL_NONE;
         if (xcp_is_xbox_series_pid(pid)) return XCP_CTRL_XBOX_SERIES;
-        /* 0x0719 (wireless receiver) and anything else Microsoft is treated as
-         * GIP: third-party pads re-badge themselves under VID 0x045E with
-         * product ids nobody has catalogued. */
+        /* Anything else Microsoft is treated as GIP: third-party pads
+         * re-badge themselves under VID 0x045E with product ids nobody has
+         * catalogued. */
         return XCP_CTRL_XBOXONE;
     }
 
@@ -109,8 +113,7 @@ xcp_controller_type xcp_controller_type_for_ids(uint16_t vid, uint16_t pid)
 
 static int microsoft_pid_is_known(uint16_t pid)
 {
-    return pid == XCP_PID_XBOX360 || pid == XCP_PID_360_WLESS ||
-           xcp_is_xboxone_pid(pid);
+    return pid == XCP_PID_XBOX360 || xcp_is_xboxone_pid(pid);
 }
 
 xcp_controller_type xcp_controller_type_for_interface(uint16_t vid, uint16_t pid,

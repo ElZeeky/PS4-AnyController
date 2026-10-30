@@ -207,11 +207,17 @@ typedef struct __attribute__((packed)) {
     uint8_t right_y_hi;     /* [11] */
 } xcp_switch_pro_report;
 
-/* xcp_switch_pro_report.buttons_right bits */
+/*
+ * xcp_switch_pro_report.buttons_right bits.
+ *
+ * This is the real Pro Controller order: Y X B A. It is NOT the PDP/HORI HID
+ * order (Y B A X) used by XCP_SWITCH_* above; copying that one here swapped
+ * three of the four face buttons.
+ */
 #define XCP_SWPRO_Y       0x01u
-#define XCP_SWPRO_B       0x02u
-#define XCP_SWPRO_A       0x04u
-#define XCP_SWPRO_X       0x08u
+#define XCP_SWPRO_X       0x02u
+#define XCP_SWPRO_B       0x04u
+#define XCP_SWPRO_A       0x08u
 #define XCP_SWPRO_R       0x40u
 #define XCP_SWPRO_ZR      0x80u
 

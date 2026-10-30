@@ -617,3 +617,9 @@ int xcp_decode(xcp_controller_type type,
         return 0;
     }
 }
+
+int xcp_gip_guide_state(const uint8_t *buf, size_t len)
+{
+    if (!buf || len < 5 || buf[0] != XCP_XBOXONE_REPORT_GUIDE) return -1;
+    return (buf[4] & 0x01u) ? 1 : 0;
+}

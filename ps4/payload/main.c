@@ -73,6 +73,53 @@
 
 extern uint32_t kernel_get_fw_version(void);
 
+/* An AddDevice call can create a device even when the kernel log never names it,
+ * and an unnamed device is never removed. Retrying forever therefore piles up
+ * orphan virtual pads. Stop after this many attempts; replugging the controller
+ * starts the count again. */
+#define XCP_PAD_MAX_ATTEMPTS 3
+
+/* How long to wait for our own marker to come back through the klog reader. */
+#define XCP_KLOG_PROBE_MS 1000
+
+/* A source that opens but never decodes anything is retried with a growing
+ * pause instead of a tight reconnect loop that floods the log. */
+#define XCP_DEAD_BACKOFF_STEP_US 1000000
+#define XCP_DEAD_BACKOFF_MAX_US  15000000
+
+/* While nothing usable is on the bus, list what IS there this often. */
+#define XCP_NO_DEVICE_DUMP_US 10000000
+
+/* Reports that arrive but never decode: log the shape of one after this many. */
+#define XCP_UNDECODED_LOG_AFTER 20u
+
+static int g_add_attempts;
+static int g_gave_up_notified;
+
+static uint64_t xcp_rescan_interval(int dead_opens)
+{
+    uint64_t us = XCP_RESCAN_INTERVAL_US +
+                  (uint64_t)(dead_opens > 0 ? dead_opens : 0) *
+                      XCP_DEAD_BACKOFF_STEP_US;
+    return us > XCP_DEAD_BACKOFF_MAX_US ? XCP_DEAD_BACKOFF_MAX_US : us;
+}
+
+static void xcp_log_undecoded(xcp_controller_type type, const uint8_t *r,
+                              size_t len)
+{
+    char   text[64];
+    size_t i;
+    size_t used = 0;
+
+    text[0] = '\0';
+    for (i = 0; i < len && i < 12 && used + 4 < sizeof(text); i++) {
+        used += (size_t)snprintf(text + used, sizeof(text) - used, "%02X ",
+                                 (unsigned)r[i]);
+    }
+    printf(XCP_TAG "reports arrive but none decode as %s (len=%u): %s\n",
+           xcp_controller_type_name(type), (unsigned)len, text);
+}
+
 /* How long to wait before retrying virtual-pad creation after a failure. */
 #define XCP_PAD_RETRY_INTERVAL_US 3000000
 
@@ -235,6 +282,19 @@ static int xcp_create_virtual_pad(xcp_vda_device *out)
     uint64_t       device_id;
     uint32_t       fw;
 
+    if (g_add_attempts >= XCP_PAD_MAX_ATTEMPTS) {
+        if (!g_gave_up_notified) {
+            g_gave_up_notified = 1;
+            printf(XCP_TAG "gave up after %d AddDevice attempts without the "
+                           "kernel log naming a device; not creating more "
+                           "(each one may have left an orphan). Replug the "
+                           "controller to try again.\n", g_add_attempts);
+            xcp_notify("XCP: could not create the virtual pad - see "
+                       "AnyController.log");
+        }
+        return -1;
+    }
+
     if (xcp_pad_setup_once() != 0) return -1;
 
     if (xcp_klog_watch_open(&watch) != 0) {
@@ -248,9 +308,15 @@ static int xcp_create_virtual_pad(xcp_vda_device *out)
     fw = kernel_get_fw_version();
 
     xcp_klog_watch_drain(&watch);
+    if (!xcp_klog_watch_probe(&watch, XCP_KLOG_PROBE_MS)) {
+        printf(XCP_TAG "klog reader did not echo our marker within %d ms: the "
+                       "device event may be missed. Close any other klog "
+                       "client.\n", XCP_KLOG_PROBE_MS);
+    }
     xcp_klog_watch_mark(XCP_TAG "marker add direct");
     printf(XCP_TAG "vda: direct AddDevice (type %d)\n",
            XCP_VDA_DEVICE_TYPE_DIRECT);
+    g_add_attempts++;
     xcp_vda_add_device(XCP_VDA_USER_SELECT, XCP_VDA_DEVICE_TYPE_DIRECT, 1);
     device_id = xcp_klog_watch_wait_for_add(&watch, NULL, XCP_KLOG_WAIT_MS);
 
@@ -262,6 +328,7 @@ static int xcp_create_virtual_pad(xcp_vda_device *out)
             xcp_klog_watch_mark(XCP_TAG "marker add patched");
             printf(XCP_TAG "vda: patched AddDevice (type %d)\n",
                    XCP_VDA_DEVICE_TYPE_LEGACY);
+            g_add_attempts++;
             xcp_vda_add_device(XCP_VDA_USER_SELECT,
                                XCP_VDA_DEVICE_TYPE_LEGACY, 0);
             device_id = xcp_klog_watch_wait_for_add(&watch, NULL,
@@ -285,6 +352,7 @@ static int xcp_create_virtual_pad(xcp_vda_device *out)
         return -1;
     }
 
+    g_add_attempts = 0;
     xcp_vda_adopt(out, device_id);
 
     /*
@@ -335,6 +403,11 @@ int main(int argc, char *argv[])
     int                 touchpad_passthrough = 0;
     uint64_t            touchpad_last_us = 0;
     int                 logged_insert = 0;
+    int                 dead_opens = 0;
+    int                 guide_down = 0;
+    unsigned            undecoded = 0;
+    int                 undecoded_logged = 0;
+    uint64_t            last_dump = 0;
     xcp_hid_map         hid_map;
     int                 have_hid_map = 0;
     xcp_config          source_cfg;
@@ -402,7 +475,8 @@ int main(int argc, char *argv[])
         uint64_t now = sceKernelGetProcessTime();
 
         /* --- find the input source ------------------------------------- */
-        if (!handle && usb && now - last_scan >= XCP_RESCAN_INTERVAL_US) {
+        if (!handle && usb &&
+            now - last_scan >= xcp_rescan_interval(dead_opens)) {
             xcp_usb_device_info info;
 
             last_scan = now;
@@ -427,16 +501,35 @@ int main(int argc, char *argv[])
                     }
                 }
                 if (handle) {
-                    xcp_config_for_source(opened_type, previous_type, &source_cfg);
+                    /*
+                     * The post-Switch face rotation is a Manba quirk, and the
+                     * Manba reports itself as Microsoft's 045E:028E. Other
+                     * pads that change mode (a GameSir T4 goes Switch -> its
+                     * own 3537:1015 Xbox mode) are NOT rotated, and applying
+                     * the workaround to them swaps their face buttons.
+                     */
+                    xcp_config_for_source(opened_type,
+                                          info.vid == XCP_VID_MICROSOFT
+                                              ? previous_type : XCP_CTRL_NONE,
+                                          &source_cfg);
                     type = opened_type;
                     previous_type = opened_type;
                     if (source_cfg.manba_post_switch_layout) {
                         printf(XCP_TAG "post-Switch Xbox face layout workaround "
                                        "active\n");
                     }
-                    if (usb->start) usb->start(NULL, handle, type);
+                    if (usb->start &&
+                        usb->start(NULL, handle, type) != XCP_USB_OK) {
+                        printf(XCP_TAG "start-up handshake for %s failed; the "
+                                       "pad may stay silent\n", info.name);
+                    }
                     last_input_us = now;
                     have_state = 0;
+                    undecoded = 0;
+                    undecoded_logged = 0;
+                    guide_down = 0;
+                    g_add_attempts = 0;
+                    g_gave_up_notified = 0;
                     xcp_pad_state_centre_sticks(&state);
                     state.connected = 0;
                     /*
@@ -462,6 +555,12 @@ int main(int argc, char *argv[])
                     printf(XCP_TAG "input source ready: %s (%s)\n",
                            info.name, xcp_controller_type_name(type));
                 }
+            } else if (now - last_dump >= XCP_NO_DEVICE_DUMP_US) {
+                /* The one-off dump at start-up often runs before the bus has
+                 * settled and says "0 devices"; show what is there now. */
+                last_dump = now;
+                printf(XCP_TAG "no supported controller found; USB bus now:\n");
+                xcp_dump_usb(usb);
             }
         }
 
@@ -489,9 +588,22 @@ int main(int argc, char *argv[])
                                     XCP_READ_TIMEOUT_MS);
 
             if (ret == XCP_USB_OK) {
+                int guide;
+
                 last_input_us = now;
                 xcp_capture_report(report, len);
-                if (skip_first_report) {
+                /* The Xbox button has its own GIP message, not a bit in the
+                 * 0x20 input report; without this the PS button never fires. */
+                guide = (type == XCP_CTRL_XBOXONE ||
+                         type == XCP_CTRL_XBOX_SERIES)
+                            ? xcp_gip_guide_state(report, len) : -1;
+                if (guide >= 0) {
+                    guide_down = guide;
+                    if (have_state) {
+                        if (guide_down) state.buttons |= XCP_BTN_PS;
+                        else            state.buttons &= ~XCP_BTN_PS;
+                    }
+                } else if (skip_first_report) {
                     /*
                      * The Xbox 360 driver publishes one synthetic report when
                      * the interface is opened: sticks at 0x8000/0x7FFF, which
@@ -514,6 +626,7 @@ int main(int argc, char *argv[])
                                              &state);
                     }
                     if (decoded) {
+                        if (guide_down) state.buttons |= XCP_BTN_PS;
                         /*
                          * The Manba's M-buttons are firmware macros: an
                          * "L3+R3" mapping arrives as a burst (L3, then
@@ -534,6 +647,11 @@ int main(int argc, char *argv[])
                             touchpad_last_us = now;
                         }
                         have_state = 1;
+                        dead_opens = 0;
+                    } else if (!have_state && !undecoded_logged &&
+                               ++undecoded >= XCP_UNDECODED_LOG_AFTER) {
+                        undecoded_logged = 1;
+                        xcp_log_undecoded(type, report, len);
                     }
                 }
                 /* A report that does not decode is ignored on purpose: some pads
@@ -549,6 +667,15 @@ int main(int argc, char *argv[])
                 if (now - last_input_us > XCP_INPUT_DEAD_US) {
                     printf(XCP_TAG "input source really gone (no data for %u ms)\n",
                            (unsigned)((now - last_input_us) / 1000));
+                    if (!have_state) {
+                        dead_opens++;
+                        if (dead_opens == 3) {
+                            xcp_notify("XCP: controller opens but sends no "
+                                       "data - see AnyController.log");
+                        }
+                    } else {
+                        dead_opens = 0;
+                    }
                     usb->close(NULL, handle);
                     handle     = NULL;
                     have_state = 0;

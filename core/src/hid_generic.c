@@ -58,6 +58,10 @@ static void put_field(xcp_hid_map *m, uint32_t usage, uint16_t page,
         slot = &m->axis[u - 0x30u];
     } else if (pg == 0x01u && u == 0x39u) {
         slot = &m->hat;
+    } else if (pg == 0x02u && u == 0xC5u) {
+        slot = &m->trigger[0];
+    } else if (pg == 0x02u && u == 0xC4u) {
+        slot = &m->trigger[1];
     } else if (pg == 0x09u && u >= 1u && u <= XCP_HID_MAX_BUTTONS) {
         slot = &m->button[u - 1u];
         if (u > m->button_count) m->button_count = (uint8_t)u;
@@ -123,7 +127,8 @@ int xcp_hid_parse_descriptor(const uint8_t *d, size_t n,
                     ? (int32_t)item_value(v, item_size, 0)
                     : val;
                 break;
-            case 3u: gl.lmin = val; break;
+            /* Tags 3/4 are Physical Minimum/Maximum. They describe units, not
+             * the value range, and must not overwrite the Logical range. */
             case 7u: gl.size = (uint32_t)val; break;
             case 8u:
                 gl.rid = (uint8_t)val;
@@ -302,6 +307,9 @@ static int report_fits(const xcp_hid_map *map, uint8_t rid, size_t len)
         if (!field_fits(&map->axis[i], rid, len)) return 0;
     }
     if (!field_fits(&map->hat, rid, len)) return 0;
+    for (i = 0; i < 2; i++) {
+        if (!field_fits(&map->trigger[i], rid, len)) return 0;
+    }
     for (i = 0; i < map->button_count; i++) {
         if (!field_fits(&map->button[i], rid, len)) return 0;
     }
@@ -321,6 +329,7 @@ int xcp_hid_decode(const xcp_hid_map *map, const uint8_t *buf, size_t len,
     uint8_t rid = 0;
     uint32_t pressed = 0, mask = 0;
     int used = 0;
+    int analog_l2 = 0, analog_r2 = 0;
     unsigned i;
 
     if (!map || !buf || !out) return 0;
@@ -361,6 +370,12 @@ int xcp_hid_decode(const xcp_hid_map *map, const uint8_t *buf, size_t len,
             if (z->present) l2 = z;
             if (rz->present) r2 = rz;
         }
+
+        /* Brake/Accelerator, when declared, are the real triggers. */
+        if (map->trigger[0].present) l2 = &map->trigger[0];
+        if (map->trigger[1].present) r2 = &map->trigger[1];
+        analog_l2 = (l2 != NULL);
+        analog_r2 = (r2 != NULL);
 
         if (field_for_report(lx, rid)) {
             out->left_x = to_byte(lx, get_bits(d, len, lx));
@@ -412,6 +427,15 @@ int xcp_hid_decode(const xcp_hid_map *map, const uint8_t *buf, size_t len,
         mask |= XCP_BTN_UP | XCP_BTN_DOWN | XCP_BTN_LEFT | XCP_BTN_RIGHT;
         if (h >= 0 && h < 8) pressed |= dirs[h];
         used = 1;
+    }
+
+    /* A pad with only digital L2/R2 buttons still has to move the analog
+     * trigger value, which is what most games read. */
+    if (!analog_l2 && (mask & XCP_BTN_L2)) {
+        out->left_trigger = (uint8_t)((pressed & XCP_BTN_L2) ? 255u : 0u);
+    }
+    if (!analog_r2 && (mask & XCP_BTN_R2)) {
+        out->right_trigger = (uint8_t)((pressed & XCP_BTN_R2) ? 255u : 0u);
     }
 
     if (!used) return 0;

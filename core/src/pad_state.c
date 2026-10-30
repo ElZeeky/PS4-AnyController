@@ -72,7 +72,14 @@ unsigned xcp_pad_state_button_count(uint32_t buttons)
 int xcp_pad_state_equal(const xcp_pad_state *a, const xcp_pad_state *b)
 {
     if (!a || !b) return a == b;
-    return memcmp(a, b, sizeof(*a)) == 0;
+    /* Field by field: the struct has trailing padding, and memcmp would compare
+     * bytes nobody ever wrote. */
+    return a->buttons == b->buttons &&
+           a->left_x == b->left_x && a->left_y == b->left_y &&
+           a->right_x == b->right_x && a->right_y == b->right_y &&
+           a->left_trigger == b->left_trigger &&
+           a->right_trigger == b->right_trigger &&
+           a->connected == b->connected;
 }
 
 /* ---------------------------------------------------------------------------

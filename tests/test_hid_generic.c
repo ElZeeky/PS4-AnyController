@@ -594,8 +594,169 @@ XCP_TEST(usb_find_prefers_a_named_profile_over_generic_hid)
     XCP_CHECK_EQ_INT(found.type, XCP_CTRL_HID_GENERIC);
 }
 
+/*
+ * Descriptors that declare Physical Minimum/Maximum (global tags 3 and 4).
+ * Many real pads do; the parser must not let them overwrite the Logical range.
+ */
+
+/* Hat with Logical 1..8 and Physical 0..315 degrees. */
+static const uint8_t g_hat_physical_desc[] = {
+    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x04,
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02,
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+    0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+    0x09, 0x39,
+    0x15, 0x01, 0x25, 0x08,             /* Logical 1..8              */
+    0x35, 0x00, 0x46, 0x3B, 0x01,       /* Physical 0..315           */
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x42, /* Data,Var,Abs,Null state   */
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x01,
+    0xC0,
+};
+
+/* Signed 8-bit X/Y: Logical -127..127 and Physical -127..127. */
+static const uint8_t g_signed_physical_desc[] = {
+    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x04,
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02,
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+    0x15, 0x81, 0x25, 0x7F,             /* Logical -127..127         */
+    0x35, 0x81, 0x45, 0x7F,             /* Physical -127..127        */
+    0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+    0xC0,
+};
+
+/*
+ * Android-mode gamepad: X/Y left stick, Z/Rz right stick, and the triggers as
+ * Simulation Controls (Brake = LT, Accelerator = RT).
+ */
+static const uint8_t g_brake_accel_desc[] = {
+    0x05, 0x01, 0x09, 0x05, 0xA1, 0x01,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x04,
+    0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x04, 0x81, 0x02,
+    0x75, 0x04, 0x95, 0x01, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x32, 0x09, 0x35,
+    0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x04, 0x81, 0x02,
+    0x05, 0x02, 0x09, 0xC5, 0x09, 0xC4, /* Brake, Accelerator        */
+    0x15, 0x00, 0x26, 0xFF, 0x00, 0x75, 0x08, 0x95, 0x02, 0x81, 0x02,
+    0xC0,
+};
+
+XCP_TEST(hid_generic_physical_range_does_not_replace_logical)
+{
+    xcp_hid_map   m;
+    xcp_pad_state s;
+    uint8_t       r[4];
+
+    XCP_CHECK_EQ_INT(xcp_hid_parse_descriptor(g_hat_physical_desc,
+                                              sizeof(g_hat_physical_desc),
+                                              0x1234, 0x5678, &m), 1);
+    XCP_CHECK_EQ_INT(m.hat.logical_min, 1);
+    XCP_CHECK_EQ_INT(m.hat.logical_max, 8);
+
+    memset(&s, 0, sizeof(s));
+    xcp_pad_state_centre_sticks(&s);
+    memset(r, 0, sizeof(r));
+    r[1] = 0x80;
+    r[2] = 0x80;
+    r[3] = 0x01; /* Logical 1 = up */
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK(s.buttons & XCP_BTN_UP);
+    XCP_CHECK_FALSE(s.buttons & XCP_BTN_RIGHT);
+
+    r[3] = 0x03; /* Logical 3 = right */
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK(s.buttons & XCP_BTN_RIGHT);
+    XCP_CHECK_FALSE(s.buttons & XCP_BTN_UP);
+}
+
+XCP_TEST(hid_generic_signed_physical_minimum)
+{
+    xcp_hid_map   m;
+    xcp_pad_state s;
+    uint8_t       r[3];
+
+    XCP_CHECK_EQ_INT(xcp_hid_parse_descriptor(g_signed_physical_desc,
+                                              sizeof(g_signed_physical_desc),
+                                              0x1234, 0x5678, &m), 1);
+    XCP_CHECK_EQ_INT(m.axis[XCP_HID_AXIS_X].logical_min, -127);
+    XCP_CHECK_EQ_INT(m.axis[XCP_HID_AXIS_X].logical_max, 127);
+
+    memset(&s, 0, sizeof(s));
+    xcp_pad_state_centre_sticks(&s);
+    memset(r, 0, sizeof(r));
+    r[1] = 0x81; /* -127 */
+    r[2] = 0x7F; /* +127 */
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK_EQ_INT(s.left_x, 0);
+    XCP_CHECK_EQ_INT(s.left_y, 255);
+}
+
+XCP_TEST(hid_generic_brake_and_accelerator_are_triggers)
+{
+    xcp_hid_map   m;
+    xcp_pad_state s;
+    uint8_t       r[7];
+
+    XCP_CHECK_EQ_INT(xcp_hid_parse_descriptor(g_brake_accel_desc,
+                                              sizeof(g_brake_accel_desc),
+                                              0x1234, 0x5678, &m), 1);
+    memset(&s, 0, sizeof(s));
+    xcp_pad_state_centre_sticks(&s);
+
+    memset(r, 0, sizeof(r));
+    r[1] = 0x80; r[2] = 0x80; r[3] = 0x80; r[4] = 0x80;
+    r[5] = 0xFF; /* Brake = LT fully pressed        */
+    r[6] = 0x00; /* Accelerator = RT released       */
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.right_trigger, 0);
+    XCP_CHECK(s.buttons & XCP_BTN_L2);
+    XCP_CHECK_FALSE(s.buttons & XCP_BTN_R2);
+
+    r[5] = 0x00;
+    r[6] = 0xFF;
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK_EQ_INT(s.left_trigger, 0);
+    XCP_CHECK_EQ_INT(s.right_trigger, 255);
+    XCP_CHECK(s.buttons & XCP_BTN_R2);
+}
+
+XCP_TEST(hid_generic_digital_triggers_set_analog_value)
+{
+    xcp_hid_map   m;
+    xcp_pad_state s;
+    uint8_t       r[7];
+
+    /* g_gamepad_desc is DirectInput order: button 7 = L2, button 8 = R2. */
+    xcp_hid_parse_descriptor(g_gamepad_desc, sizeof(g_gamepad_desc),
+                             0x1234, 0x5678, &m);
+    memset(&s, 0, sizeof(s));
+    xcp_pad_state_centre_sticks(&s);
+
+    memset(r, 0, sizeof(r));
+    r[0] = 0x40; /* button 7 */
+    r[2] = r[3] = r[4] = r[5] = 0x80;
+    r[6] = 0x08; /* hat centred */
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK(s.buttons & XCP_BTN_L2);
+    XCP_CHECK_EQ_INT(s.left_trigger, 255);
+    XCP_CHECK_EQ_INT(s.right_trigger, 0);
+
+    r[0] = 0x00;
+    XCP_CHECK_EQ_INT(xcp_hid_decode(&m, r, sizeof(r), &s), 1);
+    XCP_CHECK_FALSE(s.buttons & XCP_BTN_L2);
+    XCP_CHECK_EQ_INT(s.left_trigger, 0);
+}
+
 void xcp_register_hid_generic_tests(void)
 {
+    XCP_RUN(hid_generic_physical_range_does_not_replace_logical);
+    XCP_RUN(hid_generic_signed_physical_minimum);
+    XCP_RUN(hid_generic_brake_and_accelerator_are_triggers);
+    XCP_RUN(hid_generic_digital_triggers_set_analog_value);
     XCP_RUN(hid_generic_parses_buttons_axes_and_hat);
     XCP_RUN(hid_generic_decodes_a_report);
     XCP_RUN(hid_generic_uses_the_report_id);

@@ -43,6 +43,9 @@ typedef struct xcp_hid_map {
     uint8_t      button_count;
     xcp_hid_field axis[XCP_HID_AXES];
     xcp_hid_field hat;
+    /* Simulation Controls page: [0] Brake (0xC5) = L2, [1] Accelerator (0xC4) = R2.
+     * Pads in Android mode declare their analog triggers this way. */
+    xcp_hid_field trigger[2];
     xcp_hid_field button[XCP_HID_MAX_BUTTONS];
     uint32_t     button_bits[XCP_HID_MAX_BUTTONS];
 } xcp_hid_map;

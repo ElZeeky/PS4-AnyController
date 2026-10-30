@@ -39,6 +39,10 @@ typedef struct xcp_sceusbd_slot {
     int32_t               interface;    /* main interface we claimed       */
     int32_t               claimed_ifaces[XCP_IFACE_MAX];
     int                   claimed_count;
+    int                   read_errors_logged; /* per open, not per process  */
+    int                   strategy;     /* recovery ladder step, see below */
+    int                   got_report;   /* at least one report arrived     */
+    int                   failure_noted;
     uint8_t               endpoint;     /* interrupt IN endpoint to read   */
     uint8_t               out_endpoint; /* interrupt OUT endpoint, Switch  */
     int                   endpoint_set; /* 0 = fall back to the type's own */
@@ -97,6 +101,47 @@ static int               g_init_done;
  */
 extern int xcp_sceusbd_detach_kernel(libusb_device_handle *, int)
     __asm__("sceUsbdDetachKernelDriver");
+
+/* libusb_clear_halt(handle, endpoint); only used by recovery strategy 2. */
+extern int xcp_sceusbd_clear_halt(libusb_device_handle *, unsigned char)
+    __asm__("sceUsbdClearHalt");
+
+/*
+ * Recovery ladder for pads that open but never deliver a report (the DualSense
+ * and some HID pads abort every read straight after the claim, and nobody knows
+ * why yet). Each failed open tries the next variant; the one that delivers a
+ * report is remembered. Every step is logged, so a tester's log says which one
+ * worked. Only DualSense and Generic HID take part; the pads that already work
+ * are never touched.
+ *
+ *   0  standard
+ *   1  also claim the interfaces the console normally keeps (Sony audio)
+ *   2  SET_IDLE(0) and clear-halt on the IN endpoint after the claim
+ *   3  claim without detaching the kernel driver first
+ */
+#define XCP_STRATEGY_COUNT 4
+static int g_strategy_next[2];
+static int g_strategy_locked[2]; /* 1-based; 0 = nothing has worked yet */
+
+static int sceusbd_ladder_applies(xcp_controller_type type)
+{
+    return type == XCP_CTRL_DUALSENSE || type == XCP_CTRL_HID_GENERIC;
+}
+
+static int sceusbd_ladder_index(xcp_controller_type type)
+{
+    return type == XCP_CTRL_DUALSENSE ? 0 : 1;
+}
+
+static const char *sceusbd_strategy_name(int s)
+{
+    switch (s) {
+    case 1:  return "also claim the interfaces the console keeps";
+    case 2:  return "SET_IDLE + clear halt after the claim";
+    case 3:  return "claim without detaching the kernel driver";
+    default: return "standard";
+    }
+}
 
 /* The endpoint array is made of aligned structs, not packed descriptors. */
 static int iface_endpoints(const struct libusb_interface_descriptor *alt,
@@ -412,8 +457,12 @@ static int claim_one(libusb_device_handle *handle, int iface, const char *what,
      * interface for a keyboard. Calling this when no driver is active is
      * harmless on libusb.
      */
-    ret = xcp_sceusbd_detach_kernel(handle, iface);
-    klog(XCP_TAG "  detach %s iface %d -> %d\n", what, iface, (int)ret);
+    if (slot && slot->strategy == 3) {
+        klog(XCP_TAG "  detach %s iface %d skipped (strategy 3)\n", what, iface);
+    } else {
+        ret = xcp_sceusbd_detach_kernel(handle, iface);
+        klog(XCP_TAG "  detach %s iface %d -> %d\n", what, iface, (int)ret);
+    }
 
     ret = sceUsbdClaimInterface(handle, iface);
     klog(XCP_TAG "  claim %s iface %d -> %d\n", what, iface, (int)ret);
@@ -539,8 +588,9 @@ static int sceusbd_claim_input(libusb_device *dev, libusb_device_handle *handle,
         alt = &iface->altsetting[0];
         if ((int)alt->bInterfaceNumber == claimed) continue;
         if (slot_has_iface(slot, (int)alt->bInterfaceNumber)) continue;
-        /* Sony's pads keep their audio and HID side on the console. */
-        if (info && info->vid == XCP_VID_SONY) continue;
+        /* Sony's pads keep their audio and HID side on the console, unless the
+         * recovery ladder is trying the opposite (strategy 1). */
+        if (info && info->vid == XCP_VID_SONY && slot->strategy != 1) continue;
 
         extra = alt->bInterfaceClass == 0x01; /* audio control/streaming */
         if (!extra && alt->bInterfaceClass == 0x03 &&
@@ -566,6 +616,51 @@ static int sceusbd_claim_input(libusb_device *dev, libusb_device_handle *handle,
     klog(XCP_TAG "reading interrupt IN on EP 0x%02X of interface %d\n",
          (unsigned)slot->endpoint, (int)slot->interface);
     return 0;
+}
+
+/* Strategy 2: what a host HID driver normally does after the claim. */
+static void sceusbd_hid_wake(xcp_sceusbd_slot *slot)
+{
+    int32_t idle = sceUsbdControlTransfer(slot->handle, 0x21, 0x0A, 0x0000,
+                                          (uint16_t)slot->interface, NULL, 0, 500);
+    int     halt = slot->endpoint ? xcp_sceusbd_clear_halt(slot->handle,
+                                                           slot->endpoint)
+                                  : -1;
+    klog(XCP_TAG "strategy 2: SET_IDLE -> %d, clear halt EP 0x%02X -> %d\n",
+         (int)idle, (unsigned)slot->endpoint, halt);
+}
+
+static void sceusbd_note_report(xcp_sceusbd_slot *slot)
+{
+    int idx;
+
+    if (slot->got_report) return;
+    slot->got_report = 1;
+    if (!sceusbd_ladder_applies(slot->type)) return;
+    idx = sceusbd_ladder_index(slot->type);
+    if (!g_strategy_locked[idx]) {
+        g_strategy_locked[idx] = slot->strategy + 1;
+        klog(XCP_TAG "strategy %d (%s) delivered a report; keeping it\n",
+             slot->strategy, sceusbd_strategy_name(slot->strategy));
+    }
+}
+
+static void sceusbd_note_failure(xcp_sceusbd_slot *slot)
+{
+    int idx;
+
+    if (slot->got_report || slot->failure_noted ||
+        !sceusbd_ladder_applies(slot->type)) {
+        return;
+    }
+    slot->failure_noted = 1;
+    idx = sceusbd_ladder_index(slot->type);
+    if (!g_strategy_locked[idx]) {
+        g_strategy_next[idx] = (slot->strategy + 1) % XCP_STRATEGY_COUNT;
+        klog(XCP_TAG "no report with strategy %d; the next open tries %d (%s)\n",
+             slot->strategy, g_strategy_next[idx],
+             sceusbd_strategy_name(g_strategy_next[idx]));
+    }
 }
 
 static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
@@ -609,11 +704,23 @@ static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
     }
     slot->type = info->type;
 
+    if (sceusbd_ladder_applies(info->type)) {
+        int idx = sceusbd_ladder_index(info->type);
+
+        slot->strategy = g_strategy_locked[idx] ? g_strategy_locked[idx] - 1
+                                                : g_strategy_next[idx];
+        klog(XCP_TAG "open strategy %d: %s%s\n", slot->strategy,
+             sceusbd_strategy_name(slot->strategy),
+             g_strategy_locked[idx] ? " (known good)" : "");
+    }
+
     /*
      * A Generic HID device is only accepted after its report descriptor says
      * it is a gamepad. The descriptor also gives the bit position of every
      * button and axis, so there is no per-clone table to maintain.
      */
+    if (slot->strategy == 2) sceusbd_hid_wake(slot);
+
     if (info->type == XCP_CTRL_HID_GENERIC) {
         uint8_t desc[1024];
         int     dlen = sceUsbdControlTransfer(slot->handle, 0x81, 0x06, 0x2200,
@@ -638,6 +745,21 @@ static void *sceusbd_open(void *ctx, const xcp_usb_device_info *info)
 
     klog(XCP_TAG "opened %s as %s\n", info->name,
          xcp_controller_type_name(info->type));
+
+    if (info->type == XCP_CTRL_DUALSENSE) {
+        /*
+         * Diagnostic only (read-only request): the DualSense has failed on every
+         * firmware with the interrupt IN aborting immediately. A control
+         * transfer on EP0 tells "the endpoint is the problem" (this works, the
+         * reads do not) from "the device is being reset under us" (both fail).
+         */
+        uint8_t cal[41];
+        int     pr = sceUsbdControlTransfer(slot->handle, 0xA1, 0x01, 0x0305,
+                                            (uint16_t)slot->interface,
+                                            cal, sizeof(cal), 500);
+        klog(XCP_TAG "DualSense probe: GET_REPORT(feature 0x05) on iface %d "
+                     "-> %d\n", (int)slot->interface, pr);
+    }
 
     return slot;
 }
@@ -739,7 +861,9 @@ static int sceusbd_start(void *ctx, void *handle, xcp_controller_type type)
 
     if (!sceusbd_is_gip(type)) return XCP_USB_OK;
 
-    /* GIP input reports live on EP 0x82 and host messages go to EP 0x02. */
+    /* GIP input reports live on the interface's IN endpoint (usually 0x82) and
+     * host messages go to its OUT endpoint (usually 0x02). Use the descriptor's
+     * OUT endpoint: some third-party pads do not use 0x02. */
     ret = sceUsbdSetInterfaceAltSetting(slot->handle, slot->interface, 0);
     if (ret != 0) {
         klog(XCP_TAG "SetInterfaceAltSetting(%d,0) failed (%d)\n",
@@ -752,7 +876,9 @@ static int sceusbd_start(void *ctx, void *handle, xcp_controller_type type)
         packet[2] = (uint8_t)i;
         transferred = 0;
 
-        ret = sceUsbdInterruptTransfer(slot->handle, 0x02,
+        ret = sceUsbdInterruptTransfer(slot->handle,
+                                       slot->out_endpoint ? slot->out_endpoint
+                                                          : 0x02,
                                        packet, gip_init_len[i],
                                        &transferred, 100);
         klog(XCP_TAG "GIP init %u/%u sent, ret=%d transferred=%d\n",
@@ -793,6 +919,7 @@ static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
     if (ret == 0) {
         if (transferred <= 0) return XCP_USB_NO_DATA;
         *out_len = (size_t)transferred;
+        sceusbd_note_report(slot);
         return XCP_USB_OK;
     }
 
@@ -837,17 +964,19 @@ static int sceusbd_read(void *ctx, void *handle, uint8_t *buf, size_t buf_len,
      * few so the code is a fact.
      */
     {
-        static int logged;
-        if (logged < 8) {
+        /* Per open: a process-wide counter hid every error after the first
+         * eight, so a pad that fails again on each reconnect looked silent. */
+        if (slot->read_errors_logged < 8) {
             klog(XCP_TAG "read: ep 0x%02X ret=0x%08X transferred=%d -> treating "
                          "as disconnect\n",
                  (unsigned)endpoint, (unsigned)ret, (int)transferred);
-            logged++;
+            slot->read_errors_logged++;
         }
     }
 
     /* Anything else means the pad went away or the transfer stalled. Report a
      * disconnect and let the caller close and retry. */
+    sceusbd_note_failure(slot);
     return XCP_USB_DISCONNECT;
 }
 

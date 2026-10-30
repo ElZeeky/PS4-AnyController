@@ -47,6 +47,14 @@ void xcp_config_for_source(xcp_controller_type type,
  */
 int xcp_report_looks_valid(xcp_controller_type type, const uint8_t *buf, size_t len);
 
+/*
+ * The Xbox/Guide button of an Xbox One/Series pad is not in the 0x20 input
+ * report: it has its own GIP "virtual key" message (0x07). Returns 1 when `buf`
+ * is that message with the button down, 0 when it is up, -1 when `buf` is not
+ * that message at all.
+ */
+int xcp_gip_guide_state(const uint8_t *buf, size_t len);
+
 /* --- Small pieces, exposed because they are worth testing alone ----------- */
 
 /* Stick value with the deadzone applied, PS4 convention (centre 128). */

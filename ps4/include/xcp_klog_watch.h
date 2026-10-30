@@ -48,4 +48,13 @@ void xcp_klog_watch_mark(const char *marker);
 uint64_t xcp_klog_watch_wait_for_add(xcp_klog_watch *w, const char *marker,
                                      int timeout_ms);
 
+/*
+ * Prove the reader works BEFORE a device is created: write a marker line into
+ * the kernel log and wait for it to come back through the reader. Returns 1 if
+ * it did, 0 if it did not within `timeout_ms` (another klog client may own the
+ * stream, or the TCP server accepted us without relaying anything). The caller
+ * decides what to do; the reader is left usable either way.
+ */
+int xcp_klog_watch_probe(xcp_klog_watch *w, int timeout_ms);
+
 #endif /* XCP_KLOG_WATCH_H */

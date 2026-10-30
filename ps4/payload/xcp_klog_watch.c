@@ -100,6 +100,13 @@ void xcp_klog_watch_close(xcp_klog_watch *w)
  */
 static uint64_t xcp_klog_line(xcp_klog_watch *w, const char *line)
 {
+    /* Our own log lines come back through the kernel log. Never treat the echo
+     * of a line we printed about an event as a new event. */
+    if (strstr(line, XCP_TAG "klog pad-added") ||
+        strstr(line, XCP_TAG "  parsed DeviceId")) {
+        return 0;
+    }
+
     if (strstr(line, "xcp: marker")) {
         w->saw_marker = 1;
         return 0;
@@ -180,20 +187,45 @@ void xcp_klog_watch_mark(const char *marker)
 uint64_t xcp_klog_watch_wait_for_add(xcp_klog_watch *w, const char *marker,
                                      int timeout_ms)
 {
-    int waited = 0;
+    uint64_t start;
 
     if (!w || w->fd < 0) return 0;
 
     xcp_klog_watch_mark(marker);
 
-    while (waited <= timeout_ms) {
+    /* Real elapsed time: usleep() can sleep far longer than asked, and counting
+     * only the requested sleep made this "5000 ms" wait unpredictable. */
+    start = sceKernelGetProcessTime();
+    while ((sceKernelGetProcessTime() - start) / 1000u <= (uint64_t)timeout_ms) {
         uint64_t id = xcp_klog_pump(w);
         if (id) return id;
 
         sceKernelUsleep(XCP_KLOG_POLL_US);
-        waited += XCP_KLOG_POLL_US / 1000;
     }
 
     printf(XCP_TAG "no device event within %d ms\n", timeout_ms);
+    return 0;
+}
+
+int xcp_klog_watch_probe(xcp_klog_watch *w, int timeout_ms)
+{
+    uint64_t start;
+
+    if (!w || w->fd < 0) return 0;
+
+    /* Do not trust the reader until it has shown it can see our own line. */
+    w->saw_marker = 0;
+    xcp_klog_watch_mark(XCP_TAG "marker probe");
+
+    start = sceKernelGetProcessTime();
+    while ((sceKernelGetProcessTime() - start) / 1000u < (uint64_t)timeout_ms) {
+        (void)xcp_klog_pump(w);
+        if (w->saw_marker) return 1;
+        sceKernelUsleep(XCP_KLOG_POLL_US);
+    }
+
+    /* Not proven. Carry on exactly as before so a setup that works but does not
+     * echo is never blocked; the caller logs the warning. */
+    w->saw_marker = 1;
     return 0;
 }

@@ -824,6 +824,57 @@ XCP_TEST(switch_pro_full_report)
     XCP_CHECK_EQ_INT(s.right_trigger, 255);
 }
 
+/*
+ * Pinned to RAW bytes, not to the XCP_SWPRO_* names: a mislabelled constant
+ * would otherwise make the test agree with the bug. Byte 3 of a real Switch Pro
+ * 0x30 report is Y=0x01 X=0x02 B=0x04 A=0x08 (the PDP/HORI HID order is
+ * different). The decoder is positional: Nintendo A (east) -> Circle,
+ * B (south) -> Cross, X (north) -> Triangle, Y (west) -> Square.
+ */
+XCP_TEST(switch_pro_face_bits_are_the_real_report_layout)
+{
+    uint8_t       buf[64];
+    xcp_pad_state s;
+
+    make_switch_pro(buf, 0x04, 0, 0, 2048, 2048, 2048, 2048); /* B */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CROSS);
+
+    make_switch_pro(buf, 0x08, 0, 0, 2048, 2048, 2048, 2048); /* A */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_CIRCLE);
+
+    make_switch_pro(buf, 0x02, 0, 0, 2048, 2048, 2048, 2048); /* X */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_TRIANGLE);
+
+    make_switch_pro(buf, 0x01, 0, 0, 2048, 2048, 2048, 2048); /* Y */
+    XCP_CHECK_EQ_INT(xcp_decode(XCP_CTRL_SWITCH_PRO, buf, 64, NULL, &s), 1);
+    XCP_CHECK_EQ_HEX(s.buttons, XCP_BTN_SQUARE);
+}
+
+XCP_TEST(gip_guide_message_is_decoded)
+{
+    uint8_t down[6]   = { 0x07, 0x20, 0x00, 0x02, 0x01, 0x5B };
+    uint8_t up[6]     = { 0x07, 0x20, 0x01, 0x02, 0x00, 0x5B };
+    uint8_t input[18] = { 0x20 };
+
+    XCP_CHECK_EQ_INT(xcp_gip_guide_state(down, sizeof(down)), 1);
+    XCP_CHECK_EQ_INT(xcp_gip_guide_state(up, sizeof(up)), 0);
+    XCP_CHECK_EQ_INT(xcp_gip_guide_state(input, sizeof(input)), -1);
+    XCP_CHECK_EQ_INT(xcp_gip_guide_state(down, 4), -1);
+    XCP_CHECK_EQ_INT(xcp_gip_guide_state(NULL, 6), -1);
+}
+
+XCP_TEST(wireless_360_receiver_is_not_treated_as_gip)
+{
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_ids(0x045E, 0x0719), XCP_CTRL_NONE);
+    /* Even if its interface looks like nothing we know. */
+    XCP_CHECK_EQ_INT(xcp_controller_type_for_interface(0x045E, 0x0719,
+                                                       0xFF, 0x5D, 0x81, 1),
+                     XCP_CTRL_NONE);
+}
+
 XCP_TEST(switch_pro_12bit_sticks)
 {
     uint8_t       buf[64];
@@ -1046,6 +1097,9 @@ void xcp_register_translate_tests(void)
     XCP_RUN(switch_positional_face_buttons_and_hat);
     XCP_RUN(switch_zl_zr_are_digital);
     XCP_RUN(switch_pro_full_report);
+    XCP_RUN(switch_pro_face_bits_are_the_real_report_layout);
+    XCP_RUN(wireless_360_receiver_is_not_treated_as_gip);
+    XCP_RUN(gip_guide_message_is_decoded);
     XCP_RUN(switch_pro_49_byte_report);
     XCP_RUN(switch_pro_12bit_sticks);
     XCP_RUN(switch_pro_default_config_inverts_y);
